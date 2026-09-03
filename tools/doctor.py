@@ -64,6 +64,21 @@ def run():
         rows.append((OK if present else WARN, f"连接器 {tool}",
                      "在 PATH" if present else f"未找到(影响 {dom} 域真实执行，导航档不受影响)"))
 
+    # 1Password CLI
+    op_present = shutil.which("op") is not None
+    if op_present:
+        import subprocess
+        try:
+            r = subprocess.run(["op", "account", "get"],
+                              capture_output=True, text=True, timeout=5)
+            op_logged = r.returncode == 0
+        except Exception:
+            op_logged = False
+        op_msg = "已安装，已登录" if op_logged else "已安装，未登录"
+    else:
+        op_msg = "未安装(可作为凭证来源供设备接入)"
+    rows.append((OK if op_present else WARN, "1Password CLI (op)", op_msg))
+
     # 输出
     print("OpsAxiom doctor —— 部署自检\n")
     for lvl, name, detail in rows:

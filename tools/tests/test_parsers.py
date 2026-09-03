@@ -20,12 +20,14 @@ def test_df_parser():
 
 
 def test_df_inode_parser():
-    text = """Filesystem       Inodes  IUsed IUse%
-/dev/sda1        655360  655000  99%
-/data           1000000   50000   5%"""
+    text = """Filesystem     Inodes  IUsed  IFree IUse% Mounted on
+/dev/vda1      6553600 302211 6523389    5% /
+tmpfs           913174      1  913173    1% /dev/shm"""
     rows = parsers.get_parser("table/df-inode-v1")(text)["rows"]
-    assert rows[0]["ipcent"] == 99
-    assert rows[1]["ipcent"] == 5
+    assert rows[0]["ipcent"] == 5
+    assert rows[0]["itotal"] == 6553600
+    assert rows[0]["target"] == "/"
+    assert rows[1]["target"] == "/dev/shm"
 
 
 def test_du_parser():

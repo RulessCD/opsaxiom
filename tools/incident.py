@@ -38,10 +38,13 @@ CONFIRMED, REFUTED, INSUFFICIENT, PENDING = \
 
 
 def load_skill_by_id(skill_id):
-    for p in (ROOT / "skills").rglob("skill.yaml"):
-        s = yaml.safe_load(p.read_text(encoding="utf-8"))
-        if s.get("metadata", {}).get("id") == skill_id:
-            return p, s
+    import diagnose
+    for sp in (diagnose._SKILLS_CACHE, diagnose._SKILLS_LOCAL):
+        if sp.is_dir():
+            for p in sp.rglob("skill.yaml"):
+                s = yaml.safe_load(p.read_text(encoding="utf-8"))
+                if s.get("metadata", {}).get("id") == skill_id:
+                    return p, s
     return None, None
 
 

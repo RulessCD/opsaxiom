@@ -33,7 +33,7 @@ def test_dry_run_confirmed_inode_reaches_treatment():
     # 逐 check 注入事实（命令须与渲染后一致）
     inc.seed_fact("df -B1 --output=target,size,used,avail,pcent /data",
                   {"rows": [{"target": "/data", "pcent": 96}]}, now=1.0)
-    inc.seed_fact("df -i --output=ipcent /data",
+    inc.seed_fact("df -i -P /data",
                   {"rows": [{"ipcent": 99}]}, now=1.0)
     inc.seed_fact(
         "find /data -xdev -type d -exec sh -c 'echo \"$(ls -a \"$1\" | wc -l) $1\"' _ {} \\; 2>/dev/null | sort -rn | head -10",
@@ -93,7 +93,7 @@ def test_handover_and_report_export():
     inc = _disk_full_incident({"mount": "/data"})
     inc.seed_fact("df -B1 --output=target,size,used,avail,pcent /data",
                   {"rows": [{"target": "/data", "pcent": 96}]}, now=1.0)
-    inc.seed_fact("df -i --output=ipcent /data", {"rows": [{"ipcent": 99}]}, now=1.0)
+    inc.seed_fact("df -i -P /data", {"rows": [{"ipcent": 99}]}, now=1.0)
     inc.seed_fact(
         "find /data -xdev -type d -exec sh -c 'echo \"$(ls -a \"$1\" | wc -l) $1\"' _ {} \\; 2>/dev/null | sort -rn | head -10",
         {"rows": [{"path": "/data/sess", "n": 500000}]}, now=1.0)
@@ -111,7 +111,7 @@ def test_next_action_none_when_gated_by_ask():
     inc = _disk_full_incident({"mount": "/data"})
     inc.seed_fact("df -B1 --output=target,size,used,avail,pcent /data",
                   {"rows": [{"target": "/data", "pcent": 96}]}, now=1.0)
-    inc.seed_fact("df -i --output=ipcent /data", {"rows": [{"ipcent": 99}]}, now=1.0)
+    inc.seed_fact("df -i -P /data", {"rows": [{"ipcent": 99}]}, now=1.0)
     inc.seed_fact(
         "find /data -xdev -type d -exec sh -c 'echo \"$(ls -a \"$1\" | wc -l) $1\"' _ {} \\; 2>/dev/null | sort -rn | head -10",
         {"rows": [{"path": "/data/sess", "n": 500000}]}, now=1.0)

@@ -39,9 +39,57 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-07-19（第十四轮 I 系列完成）
-- **更新者**：Opus 4.8（工程实现）· 设计为 Fable 5（docs/12/13，I-0 金标准）
-- **阶段**：**第十四轮（I 系列：远程接入 + 本地化 Skill）完成 11/12，交回 Fable 评审**
+- **更新时间**：2026-09-03（第十五轮：远程 target REPL 接线 + 真机端到端验证完成）
+- **更新者**：Opus 4.8（工程实现）
+- **阶段**：**第十五轮（第二/三轮交互重构 + I-12 远程接线 + 真机验证）完成，774 pytest 全绿（仅 2 个模型检测环境既有失败，与代码无关），交回 Fable 评审**
+- **第十五轮交付**：
+  - **I-12 远程 target REPL 接线（接线完成 + 真机验证）**：
+    - **远程目标选择** `_pick_remote_target`（列设备+os+host，序号/回车选择）；
+    - **os 过滤扩展到远程**（`_os_ok_for_target` 重构：local 按本机 os / remote 按 targets.yaml
+      的 os 字段 / manual 不过滤；macos/darwin 双向别名——platform.system() 返回 darwin 而用户说 macos）；
+    - **v2 批量远程取证** `_sweep_remote`：`mixed_sweep` → gate.run_remote 自动执行已授权探针，
+      未授权/不可达降级**逐条粘贴**（保持与手动模式一致的 UX）；交互授权回调 `_ensure_authorized`（y → TTL 30 天）。
+    - **v1 单 Skill 远程协驾**（真机验证时的关键补线）：`_run` 按 target_mode 分流——remote 时
+      询问授权后构建 `remote_runner` 传入 `runtime.Session(remote_runner=...)`，`_do_check` 优先走
+      gate 远程执行，进入提示显示"协驾档（远程自动执行）"；本机/手动仍为导航档。
+    - **真机验证**（Ubuntu 22.04.5 / 公网 SSH 32147）：v1 协驾全链路（补参数 → df 自动远程执行 →
+      判读 21% → false_alarm 分支）与 v2 批量取证（mixed_sweep 9 探针 → 三假设全证实出卷宗）**均通过**。
+  - **target CLI 交互化**：`target` 无子命令 → 7 项编号菜单；add/grant/revoke/delete 缺 name 自动引导
+    （编号选设备 / add 交互输名 / 回车取消）；新增 `target delete`（同步收回授权）；add 向导补
+    **端口**问题（回车默认 22）+ host 非空循环校验 + VPN 标签自动补 `vpn:` 前缀；REPL 内提示统一
+    去掉 `opsaxiom ` 前缀；`access.resolve` 支持 `file:~` 展开（expanduser）。
+  - **真机首验暴露并修复的探针问题**：
+    - disk-full skill 两处 `df -i --output=…` 与 GNU 不兼容（-i 与 --output 互斥）→ 改 `df -i -P`
+      （POSIX 固定列序跨发行版一致），parser `table/df-inode-v1` 重写为 7 列序（测试/演示卷同步）。
+    - `mount` 无参数（打印挂载表，check_ro 分支依赖）曾被执行门误拒 → 白名单新增 mount 只读特例
+      （无参数纯查询放行；`mount /dev/x /mnt`/remount 等带参数写操作仍一律拒，边界测试覆盖）。
+    - ssh 连接器执行超时 10s → 60s（全盘 du/find 不再超时），连接握手单独限 15s 快速失败；
+    - 远程失败探针展示完整命令 + 200 字符原因（此前截断不可诊断）。
+  - **测试债清偿（+11 修复后 772 passed / 2 failed-with-known-env-cause）**：上轮"反馈统一
+    （静默签名 + issue 上报）/目标维度/os 过滤"改动的测试适配（test_repl 目标确认交互 mock、
+    platform 假装 Linux、test_oneclick_attest 重写为静默签名流断言），+ 本轮 df -i 命令串同步
+    （test_incident/_e2e/parsers/demos answers）。
+  - 顺带（上轮工作区遗留一道入库）：install.sh Python 3.9+/macOS CLT/venv 错误诊断、
+    diagnose 扫 hub registry 缓存、doctor 1Password CLI 检测、promote fork 自动去 local. 前缀。
+- **未完（1 项，照旧记 TODO）**：**I-4 enroll 首次开通 + sudoers 白名单生成器**——需真实 sshd
+  做端到端验证。设计在 docs/12 §3.5 就绪。
+- **已知遗留（15 轮确认，不需修复）**：
+  - resume 续跑不重新确认目标模式（远程会话续跑回粘贴模式）——低频路径，暂缓。
+  - test_model_cli 2 例失败为本机环境检测的既有问题（stash 基线已证与本轮无关）。
+- **给发起人的下一步**：本仓库（RulessCD/opsaxiom）main 已含全部改动；滚回 Fable 评审本轮
+  （评审重点见下）；如需社区投影（registry/website）可再触发构建。
+- **十五轮评审重点（交 Fable）**：
+  1. **`_run` 远程分流与 Session.remote_runner 的边界**——action（写）节点远程下仍走人工指引
+     （verify 粘贴），是否要为 remote 提供 verify 的 gate 通道（现设计为保持审批门在人）。
+  2. **remote_runner 的授权时机**：v1 路径授权问答在 repl 层、v2 路径在 `_ensure_authorized`
+     回调——两处文案/授权后 TTL 语义是否一致；gate 仍是唯一入口未变。
+  3. os 过滤的 targets.yaml os 字段与 skill platforms 双向（darwin/macos）别名映射的完备性。
+  4. mount 白名单特例的正则边界（`mount 2>/dev/null | ...` 放行 vs `mount -a` 拒绝）。
+  5. 实现 vs 文档：README/HANDOFF 中"协驾档（远程自动执行）"的表述与实际 gate 行为是否一致。
+
+---
+
+## 历史状态存档（第十四轮，I 系列）
 - **第十四轮交付（I 系列）**：远程接入与本地化两条线全部落地，774 pytest 全绿。
   - **接入线（I-0/1/2/3/5/7）**：四连接器（ssh/network/http，kubectl 由 kubeconfig 复用）
     → **执行门 gate.py（远程命令唯一入口）**：目标存在→per-target 授权 TTL→只读白名单

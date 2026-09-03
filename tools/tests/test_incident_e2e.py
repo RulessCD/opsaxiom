@@ -36,8 +36,8 @@ def test_e2e_disk_full_local_auto_sweep():
     runner = _fake_runner({
         "df -B1 --output=target,size,used,avail,pcent /data":
             "Mounted 1B-blocks Used Avail Use%\n/data 100 96 4 96%",
-        "df -i --output=ipcent /data":
-            "Mounted ITotal IUsed IUse%\n/data 1000 400 40%",     # ipcent<95 → 走 deleted-open
+        "df -i -P /data":
+            "Filesystem Inodes IUsed IFree IUse% Mounted on\n/data 1000 400 600 40% /data",     # ipcent<95 → 走 deleted-open
         "lsof +L1 /data": "0",                                     # 无残留句柄
         "du -xB1 /data":
             "2147483648\t/data/var/log/app.log\n1073741824\t/data/cache",

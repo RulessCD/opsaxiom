@@ -3,10 +3,19 @@
 分层：L1 关键词分类(域加权) + 域内按"入口症状/名称"词重合打分。不引入 embedding，先关键词。
 入口症状取自 docs/04 §5（`taxonomy 路径 — "口语症状"`）。
 """
+import json
+import os
 import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+_HOME = pathlib.Path(os.environ.get("OPSAXIOM_HOME", pathlib.Path.home() / ".opsaxiom"))
+
+# registry 缓存中 skills 目录（含版本子目录：skills/<id>/<version>/skill.yaml）
+_SKILLS_CACHE = _HOME / "hub" / "registry" / "skills"
+# 个人 fork 目录（skills-local/<local.id>/skill.yaml）
+_SKILLS_LOCAL = _HOME / "skills-local"
 
 # L1 域关键词（命中则给该域 skill 加权）
 _L1_KEYWORDS = {
@@ -44,19 +53,34 @@ def load_index():
     import yaml
     sym = _load_symptoms()
     idx = []
-    for p in (ROOT / "skills").rglob("skill.yaml"):
-        s = yaml.safe_load(p.read_text(encoding="utf-8"))
-        meta = s["metadata"]
-        tax = meta["taxonomy"]
-        l1 = tax.split("/")[0]
-        terms = set(_terms(meta["name"]))
-        if tax in sym:
-            terms |= set(_terms(sym[tax]))
-        terms |= set(_terms(tax.split("/")[-1]))
-        blob = meta["name"] + " " + sym.get(tax, "") + " " + tax
-        idx.append({"id": meta["id"], "name": meta["name"], "taxonomy": tax,
-                    "l1": l1, "maturity": meta["maturity"], "terms": terms,
-                    "symptom": sym.get(tax, ""), "bigrams": _bigrams(blob)})
+
+    def _scan(dir_path):
+        for p in sorted(dir_path.rglob("skill.yaml")):
+            try:
+                s = yaml.safe_load(p.read_text(encoding="utf-8"))
+                meta = s["metadata"]
+                tax = meta.get("taxonomy", "")
+                l1 = tax.split("/")[0] if tax else "unknown"
+                terms = set(_terms(meta.get("name", "")))
+                if tax in sym:
+                    terms |= set(_terms(sym[tax]))
+                terms |= set(_terms(tax.split("/")[-1]) if tax else set())
+                blob = (meta.get("name", "") + " " + sym.get(tax, "") + " " + tax)
+                idx.append({"id": meta["id"], "name": meta["name"],
+                            "taxonomy": tax, "l1": l1,
+                            "maturity": meta.get("maturity", "draft"),
+                            "terms": terms,
+                            "symptom": sym.get(tax, ""),
+                            "bigrams": _bigrams(blob),
+                            "source": "local"})
+            except Exception:
+                pass
+
+    if _SKILLS_CACHE.is_dir():
+        _scan(_SKILLS_CACHE)
+    if _SKILLS_LOCAL.is_dir():
+        _scan(_SKILLS_LOCAL)
+
     return idx
 
 

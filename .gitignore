@@ -7,3 +7,11 @@ vendor/wheels/
 skills-drafts/
 # Hub 拉取的社区 Skill（与本地 skills/ 隔离，不入本仓库）
 skills-community/
+# 需求梳理（不含入代码仓库）
+需求梳理/
+nouse_需求梳理/
+# 本机个人/工具产物
+.DS_Store
+.claude/
+.agents/
+skills-lock.json

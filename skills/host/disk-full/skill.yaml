@@ -17,7 +17,7 @@ metadata:
   authors: [opsagent-core]
   license: Apache-2.0
   params:
-    - {name: mount, source: alert, desc: 告警指向的挂载点}
+    - {name: mount, source: alert, desc: 告警指向的挂载点，如 /、/var、/data}
     - {name: svc, source: derived, desc: 持有已删除文件的服务(由 check_deleted_open 推断)}
     - {name: human_size, source: derived, desc: 已删除但被占用的可读大小}
   provenance:
@@ -36,7 +36,7 @@ discovery:
     run: {linux: "df -B1 --output=target,size,used,avail,pcent | grep -v tmpfs"}
     parser: table/df-v1
   - id: df_inode
-    run: {linux: "df -i --output=target,itotal,iused,ipcent | grep -v tmpfs"}
+    run: {linux: "df -i -P | grep -v tmpfs"}
     parser: table/df-inode-v1
 
 tree:
@@ -68,7 +68,7 @@ tree:
   - id: check_inode
     type: check
     title: 区分空间耗尽与 inode 耗尽
-    run: {linux: "df -i --output=ipcent {{mount}}"}
+    run: {linux: "df -i -P {{mount}}"}
     parser: table/df-inode-v1
     branch:
       - when: "rows[0].ipcent >= 95"

@@ -17,7 +17,31 @@ def _isolate_opsaxiom_home(monkeypatch, tmp_path):
     monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
 
 
-def test_symptom_sets_hits():
+"""W-1 Terminal REPL 分发逻辑测试。"""
+import io as _io
+import pathlib
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "sim"))
+import repl  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_opsaxiom_home(monkeypatch, tmp_path):
+    """与用户 ~/.opsaxiom 隔离：测试不读真实 model.yaml（否则会真跑本地推理，
+    慢且不确定——M-1 内置模型启用后踩到）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+
+
+def test_symptom_sets_hits(monkeypatch):
+    # _intake 现在会先问诊断目标（目标维度），喂一个"回车保持本机"；
+    # disk-full 是 Linux 专属 skill，把本机假装成 Linux 让 os 过滤放行
+    monkeypatch.setattr("builtins.input", lambda *a: "1")
+    monkeypatch.setattr("platform.system", lambda: "Linux")
     r = repl.Repl()
     r._handle("磁盘满了但 df 还有空间")
     assert r.last_hits
@@ -25,6 +49,8 @@ def test_symptom_sets_hits():
 
 
 def test_numeric_selection_runs_that_skill(monkeypatch):
+    # _intake 会先问诊断目标，喂"回车保持本机"
+    monkeypatch.setattr("builtins.input", lambda *a: "")
     r = repl.Repl()
     r._handle("kafka 积压")
     picked = {}
@@ -52,7 +78,8 @@ def test_builtins_dont_crash(capsys):
     r._handle("info host.storage.capacity.disk-full")
     r._handle("info nonexistent.skill")
     out = capsys.readouterr().out
-    assert "用法" in out and "决策树" in out and "没有这个 Skill" in out
+    # 帮助文案随版本演进，这里只断言关键信息仍在
+    assert "诊断运维问题" in out and "决策树" in out and "没有这个 Skill" in out
 
 
 def test_no_tty_refuses(monkeypatch, capsys):

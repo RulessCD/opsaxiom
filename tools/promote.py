@@ -60,6 +60,7 @@ def promote(skill_path):
     skill_path = pathlib.Path(skill_path).resolve()
     skill = yaml.safe_load(skill_path.read_text())
     name = skill["metadata"]["id"]
+    meta = skill["metadata"]
 
     # 1. 校验零 ERROR
     rep = V.validate_file(skill_path, V._default_validator())
@@ -118,6 +119,10 @@ def promote(skill_path):
     (_evidence_dir(skill_path) / "promote.json").write_text(
         json.dumps(ev, ensure_ascii=False, indent=2))
     print(f"✔ {name}: {prev} → sim_verified（证据={evidence}，{len(scens)} 场景，回滚往返={'有' if rollback_seen else '无'}）")
+
+    # fork 自动去 local. 前缀 + 发布版本
+    if meta.get("id", "").startswith("local."):
+        _de_localize(skill_path, skill, meta)
     return 0
 
 
@@ -185,6 +190,39 @@ def demote(skill_path, reason):
     (_evidence_dir(skill_path) / "demote.json").write_text(json.dumps(ev, ensure_ascii=False, indent=2))
     print(f"✔ {skill['metadata']['id']}: {prev} → draft（原因：{reason}）")
     return 0
+
+
+def _de_localize(skill_path, skill, meta):
+    """fork 晋级后自动去 local. 前缀 → 放进 skills-drafts/，可直接 hub push。"""
+    base_id = meta["derived_from"].split("@")[0] if meta.get("derived_from") else \
+              meta["id"].replace("local.", "", 1)
+    # 提取 attestor（从 authors 或 derived_from）
+    att = "anonymous"
+    authors = meta.get("authors", [])
+    if authors:
+        for a in authors:
+            if str(a) != "opsagent-core" and str(a) != "captured":
+                att = str(a); break
+    # 拼新 ID
+    vid = 1
+    draft_dir = ROOT / "skills-drafts" / (base_id + "-" + att + "-" + str(vid))
+    while draft_dir.exists():
+        vid += 1
+        draft_dir = ROOT / "skills-drafts" / (base_id + "-" + att + "-" + str(vid))
+    new_id = base_id + "-" + att + "-" + str(vid)
+
+    new_meta = dict(meta)
+    new_meta["id"] = new_id
+    new_meta.pop("visibility", None)
+    new_meta["maturity"] = "sim_verified"
+    new_skill = dict(skill)
+    new_skill["metadata"] = new_meta
+
+    draft_dir.mkdir(parents=True)
+    (draft_dir / "skill.yaml").write_text(
+        yaml.safe_dump(new_skill, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    print(f"✔ 已生成可发布版本：{draft_dir / 'skill.yaml'}")
+    print(f"  id={new_id}  （hub push 即可提 PR 至社区）")
 
 
 def main():

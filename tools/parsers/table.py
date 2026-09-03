@@ -45,20 +45,21 @@ def parse_df(text):
 
 
 def parse_df_inode(text):
-    """df -i --output=target,itotal,iused,ipcent 的输出。"""
+    """df -i -P 的输出（POSIX 列序：Filesystem Inodes IUsed IFree IUse% Mounted on）。"""
     rows = []
     for line in text.strip().splitlines():
         line = line.strip()
         if not line or line.lower().startswith(("filesystem", "target", "inodes")):
             continue
         parts = line.split()
-        if len(parts) < 2:
+        if len(parts) < 5:
             continue
-        pct = _pct(parts[-1])
+        pct = _pct(parts[4])        # IUse% 在倒数第 3 列（POSIX 固定列序）
         if pct is None:
             continue
-        target = " ".join(parts[:-3]) if len(parts) >= 4 else parts[0]
-        itotal, iused = (_int(x) for x in parts[-3:-1])
+        itotal = _int(parts[1])
+        iused = _int(parts[2])
+        target = " ".join(parts[5:]) if len(parts) >= 7 else parts[-1]
         rows.append({"target": target, "itotal": itotal, "iused": iused, "ipcent": pct})
     return {"rows": rows}
 

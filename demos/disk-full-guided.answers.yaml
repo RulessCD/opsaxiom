@@ -8,9 +8,9 @@ answers:
   locate_mount: 'Filesystem Size Used Avail Use%
 
     / 107374182400 102005473280 5368709120 95%'
-  check_inode: 'Filesystem Inodes IUsed IUse%
+  check_inode: 'Filesystem Inodes IUsed IFree IUse% Mounted on
 
-    / 6553600 1310720 20%'
+    / 6553600 1310720 5242880 20% /'
   check_deleted_open: '0'
   find_big_files: "8000000000\t/var/log"
   compress_old_logs: y

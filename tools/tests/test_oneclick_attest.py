@@ -1,4 +1,4 @@
-"""V-3 一键认证：run 终点接单 + meta.json 留存 + --from-session 预填。"""
+"""一键认证（新版静默流）：done 终点 y 反馈 → 静默签名（audit 留痕）+ 社区同步提示。"""
 import pathlib
 import sys
 
@@ -15,65 +15,47 @@ def _disk_full_skill():
                 if yaml.safe_load(x.read_text())["metadata"]["id"] == "host.storage.capacity.disk-full")
 
 
-def test_run_terminal_generates_signed_attestation(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+def _run_session(tmp_path, feedback):
     a = yaml.safe_load((ROOT / "demos" / "disk-full-guided.answers.yaml").read_text())
-    a["answers"]["done_ok:attest"] = {"os_family": "rhel", "scale": 47, "attestor": "gh:t"}
+    a["answers"]["done_ok:fb"] = "👍y" if feedback == "y" else feedback
     io = runtime.IO(answers=a["answers"], echo=False)
-    sess = runtime.Session(_disk_full_skill(), params=a["params"], mode="guided", io=io, sid="v3t")
+    sess = runtime.Session(_disk_full_skill(), params=a["params"], mode="guided",
+                           io=io, sid="att-" + feedback)
+    return sess.run()
+
+
+def test_done_with_y_feedback_runs_silent_attest(tmp_path, monkeypatch):
+    """新版：done + y 反馈 → 静默签名（audit 里有 attest 记录）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    # 无 gh_token 时静默流会问一次"是否配置同步"——喂 n（跳过）
+    monkeypatch.setattr("builtins.input", lambda *a: "n")
+    a = yaml.safe_load((ROOT / "demos" / "disk-full-guided.answers.yaml").read_text())
+    a["answers"]["done_ok:fb"] = "y"
+    io = runtime.IO(answers=a["answers"], echo=False)
+    sess = runtime.Session(_disk_full_skill(), params=a["params"], mode="guided", io=io, sid="v3y")
     r = sess.run()
     assert r["outcome"] == "done"
-    # meta.json 留存
-    assert (tmp_path / "sessions" / "v3t.meta.json").exists()
-    # attestation 生成且签名
-    adir = ROOT / "skills" / "host" / "disk-full" / "attestations"
-    made = list(adir.glob("*.yaml")) if adir.exists() else []
-    try:
-        assert made, "run 终点应生成 attestation"
-        att = yaml.safe_load(made[0].read_text())
-        assert att["skill"] == "host.storage.capacity.disk-full"
-        assert att["mode"] == "navigator"
-        assert att["signature"].startswith("ed25519:") or att["signature"].startswith("hmac:")
-    finally:
-        for m in made:
-            m.unlink()
-        if adir.exists() and not any(adir.iterdir()):
-            adir.rmdir()
+    # meta.json 留存（供 attest --from-session 预填）
+    assert (tmp_path / "sessions" / "v3y.meta.json").exists()
+    # 审计含 feedback 与 attest 记录
+    audit = pathlib.Path(r["audit_file"]).read_text()
+    assert '"type": "feedback"' in audit
+    assert '"type": "attest"' in audit and '"ok": true' in audit
 
 
-def test_negative_feedback_records_partial(tmp_path, monkeypatch):
+def test_negative_feedback_triggers_issue_report(tmp_path, monkeypatch):
+    """新版：n 反馈 → 上报社区（无 token → 浏览器预填， Tested via _report_issue 被调）。"""
     monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
     a = yaml.safe_load((ROOT / "demos" / "disk-full-guided.answers.yaml").read_text())
-    a["answers"]["done_ok:fb"] = "👎"
-    a["answers"]["done_ok:attest"] = {"os_family": "rhel", "scale": 5, "attestor": "gh:t"}
+    a["answers"]["done_ok:fb"] = "n"
+    reported = {}
+    # mock 掉 _report_issue 避免真开浏览器
     io = runtime.IO(answers=a["answers"], echo=False)
     sess = runtime.Session(_disk_full_skill(), params=a["params"], mode="guided", io=io, sid="w3neg")
+    monkeypatch.setattr(sess, "_report_issue", lambda n: {"reported": n["id"]})
+    captured = {}
+    sess._report_issue = lambda n: captured.setdefault("nid", n["id"])
     sess.run()
-    adir = ROOT / "skills" / "host" / "disk-full" / "attestations"
-    made = list(adir.glob("*.yaml")) if adir.exists() else []
-    try:
-        assert made
-        att = yaml.safe_load(made[0].read_text())
-        assert att["outcome"] == "partial"       # 👎 → partial
-    finally:
-        for m in made:
-            m.unlink()
-        if adir.exists() and not any(adir.iterdir()):
-            adir.rmdir()
-
-
-def test_outcome_mapping():
-    assert runtime.Session._outcome_from_feedback("👎") == "partial"
-    assert runtime.Session._outcome_from_feedback("👍") == "resolved"
-    assert runtime.Session._outcome_from_feedback("") == "resolved"
-
-
-def test_skip_attest_when_no_intake(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
-    a = yaml.safe_load((ROOT / "demos" / "disk-full-guided.answers.yaml").read_text())
-    # 无 done_ok:attest 键 → 跳过，不生成
-    io = runtime.IO(answers=a["answers"], echo=False)
-    sess = runtime.Session(_disk_full_skill(), params=a["params"], mode="guided", io=io, sid="v3skip")
-    sess.run()
-    adir = ROOT / "skills" / "host" / "disk-full" / "attestations"
-    assert not (adir.exists() and any(adir.iterdir()))
+    assert captured  # n 反馈 → 走了上报路径
+    # meta.json 留存
+    assert (tmp_path / "sessions" / "w3neg.meta.json").exists()

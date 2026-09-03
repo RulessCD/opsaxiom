@@ -51,6 +51,8 @@ _ALLOW_LEAD = {"cat", "df", "du", "free", "ps", "ss", "uptime", "nproc", "vmstat
                "journalctl", "ip", "ls", "find", "for", "echo", "grep", "true",
                # 自研只读采集器（U-2）：只读指标，无副作用
                "opsaxiom-collect", "nvidia-smi"}
+# mount 特例：无参数形式是纯查询（打印挂载表），带参数/选项即写（挂载/remount）
+_MOUNT_INFO = re.compile(r"^mount\s*(2>\S+\s*)*(\|\s|$|2>$)")
 _DENY = re.compile(r"\b(rm|mv|cp|dd|mkfs\w*|reboot|shutdown|kill|pkill|tee|truncate|chmod|chown)\b|>\s*/(?!dev/null)")
 # kubectl 子命令级白名单（X-2）：只读动词才放行；apply/delete/edit/scale/patch/exec 一律拒。
 # exec 尤其危险——能在容器内跑任意写命令，绝不算只读。用 token 集合判定，
@@ -75,6 +77,9 @@ def _is_readonly(cmd):
         if toks & _KUBECTL_WRITE:          # 含任何写动词 → 拒
             return False
         return bool(toks & _KUBECTL_RO)    # 且含至少一个只读动词
+    if lead == "mount":
+        # mount 无参数 = 打印挂载表（纯查询）；带任何参数/选项 = 挂载操作 → 拒
+        return bool(_MOUNT_INFO.match(cmd.strip())) and not _DENY.search(cmd)
     return lead in _ALLOW_LEAD and not _DENY.search(cmd)
 
 
