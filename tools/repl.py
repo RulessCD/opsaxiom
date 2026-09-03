@@ -128,6 +128,11 @@ class Repl:
 
     def _show_hits(self, hits):
         if not hits:
+            # registry 缓存为空（可能没同步过）→ 先指路 sync，再谈匹配
+            if not diagnose._SKILLS_CACHE.is_dir() or not any(
+                    diagnose._SKILLS_CACHE.rglob("skill.yaml")):
+                print("  ⚠ 本机 Skill 库为空，请先执行 hub sync 拉取社区 Skill。")
+                return
             print("  ⚠ 库内未找到相关 Skill。您可以：")
             print("    · 重新描述报错/现象，尝试再次匹配")
             print("    · 上报技能缺失，输入：sug \"您遇到的问题\"")

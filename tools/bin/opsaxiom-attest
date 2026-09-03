@@ -147,11 +147,23 @@ def bucket_scale(n):
 
 
 def _skill_dir(skill_id):
-    """按 taxonomy 找到 skill 目录（id 首段=域，末段=slug 近似）。"""
-    for p in (ROOT / "skills").rglob("skill.yaml"):
-        s = yaml.safe_load(p.read_text(encoding="utf-8"))
-        if s.get("metadata", {}).get("id") == skill_id:
-            return p.parent
+    """按 id 找 skill 目录：registry 缓存（唯一权威写入口）→ 个人 fork。
+    仓库 skills/ 是历史存档（需求0723 #7：官方 skill 以 registry 为准），
+    attestation 只落 registry 条目旁，绝不写仓库目录。"""
+    import os as _os
+    home = pathlib.Path(_os.environ.get("OPSAXIOM_HOME",
+                                        pathlib.Path.home() / ".opsaxiom"))
+    roots = [home / "hub" / "registry" / "skills",      # registry 缓存（含版本子目录）
+             home / "skills-local"]                     # 个人 fork
+    for base in roots:
+        if base.is_dir():
+            for p in base.rglob("skill.yaml"):
+                try:
+                    s = yaml.safe_load(p.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if s.get("metadata", {}).get("id") == skill_id:
+                    return p.parent
     return None
 
 
@@ -169,7 +181,8 @@ def build(args):
     skill_id = args.skill or _prompt("skill id")
     sdir = _skill_dir(skill_id)
     if not sdir:
-        print(f"找不到 skill id={skill_id}", file=sys.stderr)
+        print(f"找不到 skill id={skill_id}（registry 未同步该 Skill？先 hub sync）",
+              file=sys.stderr)
         return None, None
     att = {
         "skill": skill_id,
@@ -262,7 +275,11 @@ def main():
     h = hashlib.sha256(yaml.dump(att, sort_keys=True).encode()).hexdigest()[:8]
     out = adir / f"{date}-{h}.yaml"
     out.write_text(yaml.dump(att, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    print(f"已生成 attestation: {out.relative_to(ROOT)}")
+    print(f"已生成 attestation: {out}")
+    try:
+        print(f"（相对仓库根：{out.relative_to(ROOT)}）")
+    except ValueError:
+        pass   # registry 缓存条目不在仓库根下，正常
     print(f"提示：env_fingerprint 只含分桶信息，无标识性数据（docs/05 §2）。已 {att['signature'].split(':',1)[0]} 签名。")
     return 0
 
