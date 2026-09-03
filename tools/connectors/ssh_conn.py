@@ -72,10 +72,11 @@ def _proxy_sock(jump, cfg, timeout):
         "direct-tcpip", (cfg.lookup(hop).get("hostname", hop), 22), ("", 0))
 
 
-def exec_readonly(target, cred, cmd, timeout=10):
+def exec_readonly(target, cred, cmd, timeout=60):
     """执行一条命令，返回 (exit_code, stdout, stderr)。不做安全判断（gate 已做）。
 
     target: targets.yaml 里的条目（含 host/user/port）。
+    timeout: 命令执行超时；连接握手单独限制在 15s（连不上快速失败）。
     """
     host = target.get("host")
     user = target.get("user")
@@ -84,7 +85,8 @@ def exec_readonly(target, cred, cmd, timeout=10):
         raise SSHError("ssh 目标缺 host")
     cli = None
     try:
-        cli = _client_for(host or target.get("name", ""), user, port, cred, timeout)
+        cli = _client_for(host or target.get("name", ""), user, port, cred,
+                          timeout=min(timeout, 15))
         # 无 pty、无转发；命令原样执行（安全已在 gate 校验）
         _in, _out, _err = cli.exec_command(cmd, timeout=timeout, get_pty=False)
         out = _out.read().decode("utf-8", "replace")

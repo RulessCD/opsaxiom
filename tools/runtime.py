@@ -134,13 +134,15 @@ class IO:
 
 
 class Session:
-    def __init__(self, skill_path, params=None, mode="guided", io=None, sid="sess"):
+    def __init__(self, skill_path, params=None, mode="guided", io=None, sid="sess",
+                 remote_runner=None):
         self.skill = yaml.safe_load(pathlib.Path(skill_path).read_text(encoding="utf-8"))
         self.nodes = {n["id"]: n for n in self.skill["tree"]["nodes"]}
         self.entry = self.skill["tree"]["entry"]
         self.mode = mode              # guided | real
         self.io = io or IO()
         self.sid = sid
+        self.remote_runner = remote_runner  # 远程 gate 执行器（remote 模式时传入）
         self.ctx = dict(params or {})
         self.ctx["sid"] = sid
         self.path = []
@@ -240,7 +242,15 @@ class Session:
         self.io._p(f"\n━━ [排查] {self.r(n.get('title',''))} ━━")
         self._cautions(n)
         cmd = self._cmd_for(n.get("run"))
-        if self.mode == "real" and run_sim._is_readonly(cmd):
+        if self.remote_runner:
+            # 远程模式：走 gate 自动执行
+            self.io._p(f"▶ 远程执行（{self.sid}）：{cmd}")
+            try:
+                stdout = self.remote_runner(cmd, self.ctx)
+            except Exception as e:
+                stdout = ""
+                self.io._p(f"  远程命令异常：{e}")
+        elif self.mode == "real" and run_sim._is_readonly(cmd):
             import subprocess
             self.io._p(f"▶ 自动执行(只读)：{cmd}")
             try:
@@ -331,55 +341,142 @@ class Session:
         self.io._p(f"\n━━ {icon} {'结论' if kind=='done' else '升级人工'} ━━")
         self.io._p(self.r(n.get("summary", "")))
         self.outcome = kind
-        # 单比特反馈 + attest 提示
+        # 统一反馈：done/escalate 都问"有帮助吗"
+        self.io._p("\n对这次诊断有帮助吗？ 👍y / 👎n")
         ans = ""
-        fb = self.skill.get("feedback", {}).get("ask")
-        if fb:
-            self.io._p(f"\n{fb} 👍/👎")
-            if self.io.answers is not None:
-                ans = self.io.paste(n["id"] + ":fb", "").strip()
-            else:
-                try:
-                    ans = input("> ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    ans = ""
-            self._log(n["id"], "feedback", answer=ans)
-        # V-3/W-3：一键认证——仅 done 才追问，outcome 结合反馈
-        if kind == "done":
-            self._offer_attest(n, feedback=ans)
+        if self.io.answers is not None:
+            ans = self.io.paste(n["id"] + ":fb", "").strip()
+        else:
+            try:
+                ans = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                ans = ""
+        self._log(n["id"], "feedback", answer=ans)
+        # y → 静默签名；n → 统一上报社区（done/escalate 一致）
+        if ans.lower() in ("y", "yes", "是"):
+            self._offer_attest_silent(n)
+        else:
+            self._report_issue(n)
 
-    @staticmethod
-    def _outcome_from_feedback(fb):
-        """👎/否定反馈 → partial（负面 attestation 同样是宝贵信号，docs/05 允许）。"""
-        neg = ("👎", "no", "n", "否", "没", "未解决", "不行", "没解决")
-        return "partial" if fb and any(t in fb.lower() for t in neg) else "resolved"
+    def _has_gh_token(self):
+        p = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                     pathlib.Path.home() / ".opsaxiom")) / "gh_token"
+        return p.exists() and p.read_text(encoding="utf-8").strip() != ""
 
-    def _offer_attest(self, n, feedback=""):
-        """run 终点接单：确认→从会话预填→只补 2 个分桶→签名落盘（docs/08 §2）。"""
-        info = self.io.attest_intake(n["id"], "要把这次验证沉淀为社区凭据吗？")
-        if not info:
-            self.io._p("（可稍后：opsaxiom attest --from-session %s）" % self.sid)
-            return
-        rollback = "rollback_guide" in self.path
+    def _push_attest_silent(self, n):
+        """提 attestation issue 到 registry（签名已落地，issue 仅告知社区）。"""
+        import json as _j
+        import subprocess as _sp
+        home = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                         pathlib.Path.home() / ".opsaxiom"))
+        token = (home / "gh_token").read_text(encoding="utf-8").strip()
+        sid = self.skill["metadata"]["id"]
+        title = "attest: " + sid + " resolved"
+        body = ("automatic attestation.\n\n"
+                "skill: " + sid + "\n"
+                "version: " + str(self.skill["metadata"].get("version", "0.1.0")) + "\n"
+                "outcome: resolved\n"
+                "mode: navigator")
+        data = _j.dumps({"title": title, "body": body,
+                         "labels": ["attestation"]})
+        try:
+            _sp.run(
+                ["curl", "-s", "-o", "/dev/null",
+                 "-X", "POST",
+                 "-H", "Authorization: Bearer " + token,
+                 "-H", "Accept: application/vnd.github+json",
+                 "-H", "User-Agent: OpsAxiom",
+                 "-d", data,
+                 "https://api.github.com/repos/hf4Academic/opsaxiom-registry/issues"],
+                capture_output=True, text=True, timeout=15)
+        except Exception:
+            pass
+
+    def _offer_attest_silent(self, n):
+        """y 反馈后：静默生成签名 → 有 token 就推送 → 无 token 提醒 auth。"""
         mode = {"guided": "navigator", "real": "copilot"}.get(self.mode, "navigator")
-        # W-3：outcome 结合反馈；intake 显式给了 outcome 则以它为准
-        outcome = info.get("outcome") or self._outcome_from_feedback(feedback)
-        if outcome == "partial":
-            self.io._p("  （按你的反馈记为 partial——负面记录同样帮助社区改进这个 Skill）")
         attest_bin = str(HERE / "bin" / "opsaxiom-attest")
-        cmd = [sys.executable, attest_bin,
-               "--skill", self.skill["metadata"]["id"],
-               "--skill-version", str(self.skill["metadata"].get("version", "0.1.0")),
-               "--outcome", outcome, "--mode", mode,
-               "--os-family", str(info.get("os_family", "linux")),
-               "--scale", str(info.get("scale", "1")),
-               "--attestor", str(info.get("attestor", "anonymous"))]
-        if rollback:
-            cmd.append("--rollback-exercised")
-        import subprocess
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        self.io._p(r.stdout.strip() or r.stderr.strip())
-        self._log(n["id"], "attest", ok=(r.returncode == 0))
+        try:
+            import subprocess as _sub
+            r = _sub.run(
+                [sys.executable, attest_bin,
+                 "--skill", self.skill["metadata"]["id"],
+                 "--skill-version", str(self.skill["metadata"].get("version", "0.1.0")),
+                 "--outcome", "resolved", "--mode", mode,
+                 "--os-family", "linux", "--scale", "1",
+                 "--attestor", "anonymous"],
+                capture_output=True, text=True, timeout=10)
+            self._log(n["id"], "attest", ok=(r.returncode == 0))
+        except Exception:
+            pass
+
+        # token 检查
+        first_run_marker = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                         pathlib.Path.home() / ".opsaxiom")) / ".attest_asked"
+        if self._has_gh_token():
+            self._push_attest_silent(n)
+            self.io._p("  ✅ 感谢您的使用")
+        elif not first_run_marker.exists():
+            self.io._p("  同步至社区可帮更多人完善排查经验，只需一次配置（约 1 分钟），"
+                       "是否开始？ [y/n]")
+            try:
+                a = input("> ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                a = "n"
+            if a in ("y", "yes", "是"):
+                # TODO Batch 5：引导 auth 配置流程
+                self.io._p("  请执行 auth 完成配置。")
+            else:
+                first_run_marker.write_text("")
+                self.io._p("  ✅ 感谢您的使用"
+                           "（签名未同步社区，可通过 auth 指令完成配置后自动同步）")
+        else:
+            self.io._p("  ✅ 感谢您的使用"
+                       "（签名未同步社区，可通过 auth 指令完成配置后自动同步）")
+
+    def _report_issue(self, n):
+        """n 反馈后：统一上报社区（有 token 静默提，无 token 浏览器预填）。"""
+        import json as _j
+        import subprocess as _sp
+        home = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                         pathlib.Path.home() / ".opsaxiom"))
+        sid = self.skill["metadata"]["id"]
+        title = "诊断无帮助：" + sid
+        body = ('用户在诊断结束时反馈"无帮助"。\n\n'
+                "skill: " + sid + "\n"
+                "version: " + str(self.skill["metadata"].get("version", "0.1.0")) + "\n"
+                "\n---\n请补充具体原因（结论错误 / 覆盖不足 / 其他）：")
+        token = ""
+        tp = home / "gh_token"
+        if tp.exists():
+            token = tp.read_text(encoding="utf-8").strip()
+        if token:
+            data = _j.dumps({"title": title, "body": body,
+                             "labels": ["report:bug"]})
+            try:
+                _sp.run(
+                    ["curl", "-s", "-o", "/dev/null",
+                     "-X", "POST",
+                     "-H", "Authorization: Bearer " + token,
+                     "-H", "Accept: application/vnd.github+json",
+                     "-H", "User-Agent: OpsAxiom",
+                     "-d", data,
+                     "https://api.github.com/repos/hf4Academic/opsaxiom-registry/issues"],
+                    capture_output=True, text=True, timeout=15)
+                self.io._p("  ✅ 感谢您的反馈，社区将查收并完善 skills 资产。")
+                return
+            except Exception:
+                pass
+        # 无 token 或失败 → 浏览器预填
+        import urllib.parse
+        import webbrowser
+        import platform
+        q = urllib.parse.quote
+        url = ("https://github.com/hf4Academic/opsaxiom-registry/issues/new"
+               "?title=" + q(title) + "&labels=" + q("report:bug")
+               + "&body=" + q(body))
+        webbrowser.open(url)
+        self.io._p("  ✅ 已打开反馈页面，请确认后点击 Submit。感谢您的反馈。")
 
     def run(self, start=None):
         node, guard = (start or self.entry), 0

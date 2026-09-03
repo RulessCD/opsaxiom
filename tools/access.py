@@ -23,6 +23,7 @@ import re
 import yaml
 
 VALID_CONNECTORS = ("ssh", "network", "kubectl", "http")
+VALID_OS = {"linux", "darwin", "windows", "freebsd", "macos"}
 # auth 引用的合法语法（白名单——不在这里面的形态一律拒绝）
 _AUTH_RE = re.compile(r"^(agent|ssh_config|kubeconfig|keyring:[\w.-]+|file:[\w./~-]+)$")
 # 明文凭证嗅探：这些键名出现在 target 里即拒绝（R-A1）
@@ -71,6 +72,10 @@ def load_targets(path=None):
         reach = t.get("reach")
         if reach is not None and not re.match(r"^[\w-]+:[\w-]+$", str(reach)):
             errs.append(f"{name}: reach 形如 vpn:office-vpn，得到 {reach!r}")
+        # os 字段（可选，用于远程 target 时的 skill 平台过滤）
+        t_os = t.get("os")
+        if t_os is not None and t_os not in VALID_OS:
+            errs.append(f"{name}: os 必须是 {sorted(VALID_OS)} 之一（或留空），得到 {t_os!r}")
     if errs:
         raise AccessError("targets.yaml 拒绝加载：\n  " + "\n  ".join(errs))
     return targets
@@ -113,7 +118,7 @@ def resolve(target: dict, master=None) -> Credential:
             raise AccessError(f"auth: kubeconfig 但 {kc} 不存在")
         return Credential("kubeconfig", path=kc, context=target.get("context"))
     if auth.startswith("file:"):
-        p = pathlib.Path(auth[5:]).expanduser()
+        p = pathlib.Path(auth[5:]).expanduser().expanduser()
         if not p.exists():
             raise AccessError(f"auth: {auth} 指向的文件不存在")
         return Credential("file", path=str(p))
@@ -126,4 +131,19 @@ def resolve(target: dict, master=None) -> Credential:
         if not fields:
             raise AccessError(f"keyring 里没有凭证 {auth[8:]}——先 opsaxiom cred set {auth[8:]}")
         return Credential("keyring", **fields)
+    if auth.startswith("1password:"):
+        ref = auth[10:]
+        if not ref:
+            raise AccessError("auth: 1password 引用格式 1password:op://Vault/Item/field")
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["op", "read", ref],
+                capture_output=True, text=True, timeout=15)
+            if r.returncode != 0:
+                raise AccessError(f"1password 读取失败：{r.stderr.strip()[:120]}")
+            return Credential("1password", secret=r.stdout.strip(), ref=ref)
+        except FileNotFoundError:
+            raise AccessError(
+                "auth: 1password 需要 op CLI。brew install 1password-cli 然后 op signin")
     raise AccessError(f"未知 auth 引用：{auth}")
