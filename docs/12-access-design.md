@@ -224,6 +224,17 @@ prod-cluster:
    就放行什么，一条不多。Skill 库更新时白名单剧本同步再生成。这是"技能库
    即权限清单"，是本产品独有的红利。
 
+   > **⚠ 现状标注（2026-09，真机验证结论）**：sudoers 白名单位于远端（用户账号
+   > 侧），但当前 runtime 执行链（gate → ssh_conn）从不发出 `sudo <命令>`——
+   > connector 以登录用户原样执行 skill 命令。因此白名单授权此刻**没有消费者**，
+   > 向导（target add）v1 已摘除写入步骤；低权账号 opsaxiom-ro 只建账号+公钥，
+   > 需 root 的探针会失败（属预期受限）。生成器（tools/authoring/gen_sudoers.py）
+   > 保留作为接线后的地基。接线方案（gate 识别 permission-denied → 自动
+   > `sudo -n` 回退重试一次 → visudo -c 校验后才落盘）见 B 轮计划
+   > `.claude/plans/remote-sudo-wiring.md`。教训已入库：**裸名二进制导致 sudoers
+   > 语法错误（须绝对路径）；引号内 `|` 会泄漏进切段结果；写入前必须 visudo -c，
+   > 坏白名单比没有白名单糟**。
+
 ## 6. 易用性设计（把"配置"变成"确认"）
 
 - **首次向导**：`opsaxiom target add web-01` → 交互问 connector/host/怎么登录，

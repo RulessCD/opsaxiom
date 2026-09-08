@@ -74,12 +74,19 @@ def build_target_entry(connector, host=None, auth=None, user=None,
     return t
 
 
-def detect_default_auth(host, ssh_config_text=None, agent_has_keys=False):
-    """自动试探默认 auth：config 里有该 Host 条目→ssh_config；agent 有钥匙→agent。"""
+def detect_default_auth(host, ssh_config_text=None, agent_has_keys=False, local_key=None):
+    """自动试探默认 auth：config 里有该 Host 条目→ssh_config；本机有私钥→file: 引用
+    （config 没写该 Host 时最常见可用路径，避开"agent 但无钥匙"坑）；
+    agent 有钥匙→agent；都没有→ssh_config。local_key：None=自动探测 ~/.ssh，False=无钥匙。"""
     if ssh_config_text:
         for t in parse_ssh_config(ssh_config_text):
             if t["name"] == host:
                 return "ssh_config"
+    if local_key is None:
+        import enroll as E
+        local_key = E.find_local_key()
+    if local_key:
+        return "file:" + str(local_key)
     return "agent" if agent_has_keys else "ssh_config"
 
 
@@ -254,6 +261,83 @@ def _save_targets(targets):
     return f
 
 
+def _enroll_ssh(name, host, port, user):
+    """SSH 首次开通编排（docs/12 §3.5）：密钥 → 密码上门一次 →
+    公钥写入 + os 探测 +（可选）只读账号 —— 全部在一次密码连接内完成；
+    连接关闭后密码立即清除；最后密钥重连验证。任何一步失败/放弃返回
+    {'ok': False, 'err': …}（调用方退化普通模式）；成功返回
+    {'ok': True, 'key_path', 'user'（可能降为 opsaxiom-ro）, 'os'}。
+    （只读账号 v1 不写 sudoers 白名单——runtime 尚未消费 sudo 授权，
+    见 docs/12 §5.6 标注；生成器 gen_sudoers.py 保留待接线。）"""
+    import getpass
+    import enroll as E
+    res = {"ok": False, "err": ""}
+    try:
+        # ① 本机密钥（无则生成）
+        key_path, created = E.ensure_local_key()
+        if created:
+            print(f"  已生成本机密钥 {key_path}（口令为空；如需口令请自行 ssh-keygen 替换）")
+        else:
+            print(f"  使用本机已有密钥 {key_path}")
+        pub = E.pubkey_of(key_path)
+
+        # ② 密码一次（getpass 不回显；空/取消 → 退化普通模式）
+        user = user or "root"
+        try:
+            pw = getpass.getpass(f"  请输入 {user}@{host} 的密码（只用一次，不保存）：")
+        except (EOFError, KeyboardInterrupt):
+            res["err"] = "用户取消"; return res
+        if not pw:
+            res["err"] = "未输入密码"; return res
+
+        print(f"  ▶ 连接 {host}:{port or 22} …")
+        cli = E.connect_with_password(host, port or 22, user, pw)
+
+        # ③ 同一连接上完成全部远端操作（密码只在连接建立一刻被用到）
+        os_name = None
+        try:
+            ok, errtxt = E.install_pubkey(cli, pub)
+            if not ok:
+                res["err"] = f"公钥写入失败：{errtxt[:120]}"
+                return res
+            print("  ✔ 公钥已写入该账号 authorized_keys")
+            os_name = E.probe_os(cli)
+            if os_name:
+                print(f"  目标 os：{os_name}（自动探测）")
+
+            # ④ 可选：只读账号（低权；探针以其自身权限跑，需 root 的探针会失败——
+            #    sudoers 白名单线路 runtime 尚未接线，本轮摘除，见 docs/12 §5.6）
+            try:
+                want_ro = input("  创建只读账号 opsaxiom-ro（仅诊断探针可用，需 root 的探针会受限）？[y/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                want_ro = ""
+            if want_ro in ("y", "yes", "是"):
+                ok, rerr = E.create_ro_user(cli, pub, sudoers_text=None)
+                if ok:
+                    print(f"  ✔ 只读账号 {E.ENROLL_USER} 已创建")
+                    user = E.ENROLL_USER      # targets.yaml 的登录用户降为只读账号
+                else:
+                    print(f"  ⚠ 只读账号创建失败（{rerr[:100]}）——继续使用 {user}。")
+        finally:
+            try:
+                cli.close()
+            except Exception:
+                pass
+        del pw                                  # 密码通道关闭后清除（零痕迹红线）
+
+        # ⑤ 密钥验证（file 认证，与 targets.yaml 的 auth 一致）
+        ok, verr = E.verify_key_login(host, port or 22, user, key_path)
+        if not ok:
+            res["err"] = verr
+            return res
+        print("  ✔ 密钥登录验证通过（只读探针 df -B1 / 正常）")
+        res.update({"ok": True, "key_path": str(key_path), "user": user, "os": os_name})
+        return res
+    except Exception as ex:
+        res["err"] = str(ex)[:150]
+        return res
+
+
 def _cmd_add(args):
     if not args.name:
         args.name = input("  设备名：").strip()
@@ -275,6 +359,7 @@ def _cmd_add(args):
 
     conn = ask("连接方式 [ssh/network/kubectl/http]", "ssh")
     entry = {}
+    reach_label = ""
     if conn == "kubectl":
         entry = build_target_entry("kubectl", auth="kubeconfig",
                                    context=ask("kube context（留空=当前）") or None)
@@ -287,22 +372,45 @@ def _cmd_add(args):
         default_port = "22" if conn == "ssh" else ""
         p = input(f"端口（回车默认 {default_port}）：" if default_port else "端口（回车跳过）：").strip()
         port = p or default_port
-        auth = detect_default_auth(host, cfg_text, agent_has) if conn == "ssh" else \
-            ("keyring:" + args.name)
-        # 1password 选项
-        if shutil.which("op"):
-            print(f"  自动检测凭证方式：{auth}")
-            use_op = ask("  改用 1Password？输入引用如 op://Vault/Item/field（留空=保持 {auth}）") or ""
-            if use_op:
-                auth = "1password:" + use_op
-        entry = build_target_entry(conn, host=host, auth=auth, port=(int(port) if port and port.isdigit() else None),
-                                   user=(ask("登录用户") or None) if conn != "http" else None)
-    reach_label = ask("需要先连 VPN/跳板吗？输入标签名如 office（留空=直连）")
+        user = (ask("登录用户") or None) if conn != "http" else None
+        reach_label = ask("需要先连 VPN/跳板吗？输入标签名如 office（留空=直连）")
+
+        if conn == "ssh":
+            # ---- SSH 首次开通（I-4）：密钥 → 密码上门一次 →（可选只读账号）→ 验证 ----
+            enroll_res = _enroll_ssh(args.name, host, port, user)
+            if enroll_res.get("ok"):
+                entry = build_target_entry(
+                    "ssh", host=host,
+                    auth="file:" + str(enroll_res["key_path"]),
+                    user=enroll_res["user"],
+                    port=(int(port) if port and port.isdigit() else None),
+                    os=enroll_res.get("os"))
+            else:
+                # 开通失败（密码错/连不上/取消）→ 退化为普通模式（现状行为）
+                auth = detect_default_auth(host, cfg_text, agent_has)
+                print(f"  ⚠ 开通未完成（{enroll_res.get('err', '')}）——已按普通模式（{auth}）保存引用，"
+                      f"可自行处理认证后用 target doctor 验证。")
+                entry = build_target_entry(conn, host=host, auth=auth,
+                                           port=(int(port) if port and port.isdigit() else None),
+                                           user=user)
+        else:
+            auth = "keyring:" + args.name
+            # 1password 选项
+            if shutil.which("op"):
+                print(f"  自动检测凭证方式：{auth}")
+                use_op = ask("  改用 1Password？输入引用如 op://Vault/Item/field（留空=保持 {auth}）") or ""
+                if use_op:
+                    auth = "1password:" + use_op
+            entry = build_target_entry(conn, host=host, auth=auth, port=(int(port) if port and port.isdigit() else None),
+                                       user=user)
     if reach_label:
         entry["reach"] = "vpn:" + reach_label
-    t_os = ask("目标操作系统 [linux/macos/windows/freebsd]（回车跳过）")
-    if t_os:
-        entry["os"] = t_os.lower()
+    if conn == "ssh" and entry.get("os"):
+        pass                                    # ssh 开通已 uname 自动探测，不再问
+    else:
+        t_os = ask("目标操作系统 [linux/macos/windows/freebsd]（回车跳过）")
+        if t_os:
+            entry["os"] = t_os.lower()
     targets[args.name] = entry
     try:
         _save_targets(targets)

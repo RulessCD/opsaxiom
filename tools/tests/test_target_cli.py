@@ -41,8 +41,18 @@ def test_build_target_entry_defaults():
 
 def test_detect_default_auth():
     assert T.detect_default_auth("prod-web-01", SSH_CONFIG) == "ssh_config"
-    assert T.detect_default_auth("unknown-host", "", agent_has_keys=True) == "agent"
-    assert T.detect_default_auth("unknown-host", "", agent_has_keys=False) == "ssh_config"
+    # local_key=False 显式声明无私钥，排除本机 ~/.ssh 干扰
+    assert T.detect_default_auth("unknown-host", "", agent_has_keys=True,
+                                 local_key=False) == "agent"
+    assert T.detect_default_auth("unknown-host", "", agent_has_keys=False,
+                                 local_key=False) == "ssh_config"
+
+
+def test_detect_default_auth_prefers_local_key():
+    """本机有私钥 → file: 引用优先于 agent（避开"agent 但无钥匙"坑）。"""
+    assert T.detect_default_auth("unknown-host", "", agent_has_keys=True,
+                                 local_key="/Users/x/.ssh/id_ed25519") == \
+        "file:/Users/x/.ssh/id_ed25519"
 
 
 def test_diagnose_reach_all_down_is_grouped():
