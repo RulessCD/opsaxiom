@@ -13,13 +13,26 @@ ssh_conn.py —— SSH 连接器（docs/12 §4，I-1）。
 支持 auth：agent（SSH_AUTH_SOCK 里的密钥）/ ssh_config（~/.ssh/config 的
 ProxyJump/IdentityFile/User/Port 原样生效）/ file（指定私钥文件）。
 """
+import logging
 import pathlib
+import socket
 
 import paramiko
+
+# transport 后台线程的异常（banner reset 等）已由 exec_readonly 转成带解释的
+# SSHError 抛给上层；paramiko 自己再打的那段 stderr traceback 是纯噪声（真机
+# 教训：VPN 抖动一次刷两屏栈）。此模块被 import 即静音 paramiko 全局日志。
+logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 
 
 class SSHError(Exception):
     pass
+
+
+class SSHConnectError(SSHError):
+    """连接建立失败（握手/banner/认证/网络不可达）——与"命令已执行但失败"区分：
+    连不上时目标基本不可达，上层应一次性给修复指引，不应逐条转人工贴回
+    （真机 banner reset 教训：VPN 抖动一次，11 条探针差点盘问 11 轮）。"""
 
 
 def _client_for(host, user, port, cred, timeout):
@@ -84,9 +97,11 @@ def exec_readonly(target, cred, cmd, timeout=60):
     if not host and cred.kind != "ssh_config":
         raise SSHError("ssh 目标缺 host")
     cli = None
+    connected = False
     try:
         cli = _client_for(host or target.get("name", ""), user, port, cred,
                           timeout=min(timeout, 15))
+        connected = True
         # 无 pty、无转发；命令原样执行（安全已在 gate 校验）
         _in, _out, _err = cli.exec_command(cmd, timeout=timeout, get_pty=False)
         out = _out.read().decode("utf-8", "replace")
@@ -94,7 +109,19 @@ def exec_readonly(target, cred, cmd, timeout=60):
         rc = _out.channel.recv_exit_status()
         return rc, out, err
     except paramiko.SSHException as e:
-        raise SSHError(f"SSH 连接/执行失败：{e}") from e
+        if not connected:
+            raise SSHConnectError(f"SSH 连接失败：{e}") from e
+        raise SSHError(f"SSH 执行失败：{e}") from e
+    except (socket.timeout, ConnectionError, OSError) as e:
+        # 三类底层网络故障：执行超时（str 本身为空）/ 连接被对端掐（banner reset、
+        # VPN 抖动）。都要给带解释的消息（真机教训：空 err 或裸栈漏到报告不可读）
+        if isinstance(e, socket.timeout):
+            if not connected:
+                raise SSHConnectError(f"SSH 连接超时（>{min(timeout, 15)}s 拨不通）——"
+                                      f"检查网络/VPN 或 target doctor") from e
+            raise SSHError(f"命令执行超时（>{timeout}s）——重活考虑贴回人工执行") from e
+        raise SSHConnectError(f"网络连接失败（{type(e).__name__}: {e}）——"
+                              f"检查 VPN/reach（target doctor）后重试") from e
     finally:
         if cli is not None:
             cli.close()

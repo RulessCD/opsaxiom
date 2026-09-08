@@ -6,10 +6,8 @@ expect_path:
 - done_found_dir
 node_ctx:
   check_inode:
-    output:
-      value: 95
     rows:
-    - {}
+    - ipcent: 95
   find_dirs:
     rows:
     - name: 100001

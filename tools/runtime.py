@@ -29,6 +29,12 @@ _TEMPLATE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 MISSING = "⟨?⟩"          # 字段缺失占位（U-1：别再渲染成空串留下语义黑洞）
 
 
+class RemoteNotAllowed(Exception):
+    """远程命令不可自动执行（如 ro 目标白名单外）——上层转为人工贴回。
+    由 remote_runner 闭包抛出（target 信息在 repl 构造处，Session 不持有）。"""
+    pass
+
+
 def render(text, ctx):
     """把 {{expr}} 用受限求值器渲染。
 
@@ -243,10 +249,13 @@ class Session:
         self._cautions(n)
         cmd = self._cmd_for(n.get("run"))
         if self.remote_runner:
-            # 远程模式：走 gate 自动执行
+            # 远程模式：走 gate 自动执行（ro 目标白名单路由在 gate 侧；
+            # 名单外命令会收到带降级提示的 GateError，这里转贴回）
             self.io._p(f"▶ 远程执行（{self.sid}）：{cmd}")
             try:
                 stdout = self.remote_runner(cmd, self.ctx)
+            except RemoteNotAllowed as e:
+                stdout = self.io.paste(n["id"], f"▶ {e}\n  请人工执行并粘贴输出（END 结束）：\n  $ {cmd}")
             except Exception as e:
                 stdout = ""
                 self.io._p(f"  远程命令异常：{e}")

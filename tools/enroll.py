@@ -6,8 +6,10 @@ enroll.py —— SSH 首次开通（I-4 / docs/12 §3.5，整合进 target add �
   2. connect_with_password()   密码 paramiko 上门一次（getpass，零痕迹——用完即 del）
   3. install_pubkey()          公钥写入该账号 authorized_keys（幂等 grep 去重）
   4. probe_os()                uname 探测 os
-  5. create_ro_user()（可选）  建 opsaxiom-ro + 公钥（低权账号，不带 sudo）
-                               （sudoers 白名单待 runtime 接线后启用，docs/12 §5.6）
+  5. create_ro_user()（可选）  建 opsaxiom-ro + 公钥 + /etc/sudoers.d/opsaxiom-ro
+                               （sudoer_bins → 远端 command -v 解析绝对路径 →
+                               visudo -c 校验 → 过了才落位；白名单来自
+                               gen_sudoers 扫 registry Skill 命令集）
   6. verify_key_login()        改用密钥重连 + 只读探针验证
 
 安全红线：
@@ -105,6 +107,18 @@ def install_pubkey(cli, pub):
     return rc == 0, err.strip()[:200]
 
 
+def install_pubkey_root(cli, pub):
+    """公钥写入 root 的 authorized_keys（公钥双装，方案 A 升档通道）：
+    grant 后切 admin 直登时不再要密码。需当前账号能免密 sudo（enroll 通行证
+    本就有）。幂等：grep 精确去重。返回 (ok, err)。"""
+    cmd = ("mkdir -p /root/.ssh && chmod 700 /root/.ssh && touch /root/.ssh/authorized_keys"
+           f" && grep -qxF {shq(pub)} /root/.ssh/authorized_keys 2>/dev/null"
+           f" || echo {shq(pub)} >> /root/.ssh/authorized_keys;"
+           " chmod 600 /root/.ssh/authorized_keys")
+    rc, out, err = rc_out(cli, f"sudo sh -c {shq(cmd)}", timeout=15)
+    return rc == 0, err.strip()[:200]
+
+
 def probe_os(cli):
     """uname -s 探测目标 os（linux/darwin/freebsd）。失败返回 None。"""
     rc, out, _err = rc_out(cli, "uname -s", timeout=10)
@@ -113,9 +127,25 @@ def probe_os(cli):
 
 # ---------- 可选：只读账号 opsaxiom-ro + sudoers 白名单 ----------
 
-def create_ro_user(cli, pub, sudoers_text, user=ENROLL_USER):
-    """建只读账号（useradd）+ 装公钥 + 写 sudoers 白名单。
-    需当前账号有 root 直登或 sudo 免密。返回 (ok, err)。"""
+def resolve_bin_paths(cli, bins):
+    """在目标机逐 bin `command -v` 解析绝对路径（sudoers 要求绝对路径，
+    本机无法预知发行版路径）。返回 {裸名: 绝对路径}；解析不到的 bin 不入表。"""
+    paths = {}
+    for b in bins:
+        rc, out, _err = rc_out(cli, f"command -v {shq(b)}", timeout=10)
+        p = out.strip()
+        if rc == 0 and p.startswith("/"):
+            paths[b] = p
+    return paths
+
+
+def create_ro_user(cli, pub, sudoers_text, user=ENROLL_USER, sudoer_bins=None):
+    """建只读账号（useradd）+ 装公钥 +（可选）写 sudoers 白名单。
+    需当前账号有 root 直登或 sudo 免密。返回 (ok, err)。
+    sudoer_bins 提供时：先在目标机 `command -v` 解析绝对路径重渲染白名单，
+    写 /tmp → visudo -cf 校验 → 过了才 install 落正位（440）——
+    校验不过不会污染 /etc/sudoers.d（"坏白名单比没有白名单糟"红线，
+    真机裸名 syntax error 教训）。"""
     home = f"/home/{user}"
     cmds = [
         # 已存在则幂等跳过
@@ -127,13 +157,25 @@ def create_ro_user(cli, pub, sudoers_text, user=ENROLL_USER):
         f"chmod 700 {home}/.ssh && chmod 600 {home}/.ssh/authorized_keys",
         f"chown -R {user}:{user} {home}/.ssh",
     ]
-    if sudoers_text:
-        # sudoers.d 内容经 stdin（tee）写 root 文件，440 权限
+    if sudoer_bins:
+        import gen_sudoers as G
+        paths = resolve_bin_paths(cli, sudoer_bins)
+        if not paths:
+            return False, "白名单命令在目标机全部解析不到绝对路径（command -v 全空）"
+        path_text = G.render_sudoers_file(
+            [(n, None) for n in sudoer_bins if n in paths],
+            user=user, bin_paths=paths)
         cmds += [
-            f"echo {shq(sudoers_text.rstrip(chr(10)))} | "
-            f"sudo tee /etc/sudoers.d/opsaxiom-ro > /dev/null",
-            "chmod 440 /etc/sudoers.d/opsaxiom-ro",
+            # 临时文件 → visudo 校验 → 过了才 install 落位
+            f"echo {shq(path_text.rstrip(chr(10)))} | "
+            f"sudo tee /tmp/opsaxiom-ro.sudoers.tmp > /dev/null",
+            f"sudo visudo -cf /tmp/opsaxiom-ro.sudoers.tmp",
+            f"sudo install -m 440 /tmp/opsaxiom-ro.sudoers.tmp /etc/sudoers.d/opsaxiom-ro",
+            f"rm -f /tmp/opsaxiom-ro.sudoers.tmp",
         ]
+    elif sudoers_text:
+        # 裸名预览版直接写入是禁止的（真机教训）；此分支仅兼容旧签名不再使用
+        return False, "裸名 sudoers 不允许直接写入（需 sudoer_bins 走路径解析）"
     return _run_all(cli, cmds)
 
 
@@ -150,7 +192,8 @@ def _run_all(cli, cmds):
 
 def verify_key_login(host, port, username, key_path, timeout=15):
     """改用密钥重连 + 跑一条只读探针。返回 (ok, err)。
-    只用 file 认证（不经 agent/config），与 targets.yaml 最终 auth 一致。"""
+    只用 file 认证（不经 agent/config），与 targets.yaml 最终 auth 一致。
+    可复用于验证任意账号的密钥通道（如 root 通道，方案 A 升档闸门）。"""
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

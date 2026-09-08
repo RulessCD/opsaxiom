@@ -3,12 +3,16 @@ gate.py —— 执行门（docs/12 §4，I-1）。远程命令的【唯一】入
 
 一条命令要打到远端，必须穿过这道门，顺序不可调换：
   1. 目标存在（load_targets，access 三红线已在加载时把关）
-  2. 已授权（per-target trust；I-2 升级为 TTL）——未授权直接拒
+  2. 授权档位（B 轮 v2）——root 档：per-target trust 已授权；白名单档：
+     未授权但 sudo_whitelist 目标且命令在 registry 名单内（授权点在 add
+     时刻确认白名单，物理边界在远端 /etc/sudoers.d）；两档皆非 → 拒
   3. 只读白名单（按 connector：ssh/kubectl 走 _is_readonly；network/http 见 I-5）
-     —— 写命令结构性进不来（R-A3）
+     —— 写命令结构性进不来（R-A3），任何档都不豁免
   4. param 注入防护（T-3：不可信 param 值含 shell 元字符且出现在命令里 → 拒）
   5. 解析凭证（access.resolve）→ 连接器执行
-  6. 审计落盘（命令/输出摘要/目标/时刻；【绝不】写凭证——R-A2）
+     —— ssh 目标按档切身份：root 档且带 admin_user → 切管理账号直登
+     （方案 A，公钥开通时已双装）；白名单档 → 首段 sudo -n
+  6. 审计落盘（命令/实际身份/输出摘要/目标/时刻；【绝不】写凭证——R-A2）
 
 连接器只负责"拨通"，不做任何安全判断——安全全在这道门里（docs/12 §4）。
 拒绝也审计：一次被拦的写命令是安全事件，要留痕。
@@ -31,6 +35,22 @@ from run_sim import _is_readonly  # noqa: E402
 
 class GateError(Exception):
     pass
+
+
+class GateRemoteNotAllowed(GateError):
+    """白名单档（未 grant 的 ssh 白名单目标）上，名单外命令 ro 账号物理上
+    跑不动（远端 sudoers 只放行名单内命令）——不是安全事件，是能力边界。
+    gate 不 import runtime（避免循环导入），定义同构异常；调用方（repl/
+    sweep）按需要捕获转人工贴回，语义与 runtime.RemoteNotAllowed 一致。"""
+
+    def __init__(self, target_name, cmd):
+        self.target_name = target_name
+        self.cmd = cmd
+        super().__init__(
+            f"该命令不在 {target_name} 的只读白名单内——ro 账号无法执行需 root 的探针")
+
+
+ENROLL_USER = "opsaxiom-ro"        # 与 enroll.py 的只读账号名保持一致（避免循环 import）
 
 
 def _home():
@@ -97,12 +117,56 @@ def _stamp(now=None):
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def _allow_bins():
+    """registry 白名单成员（裸名集合）。与写入远端 /etc/sudoers.d/opsaxiom-ro
+    的清单同源同函数（gen_sudoers）。算不出 → 空集（fail-closed：不提权）。"""
+    try:
+        sys.path.insert(0, str(HERE / "authoring"))
+        import gen_sudoers as G
+        reg_root = G.default_skills_root()
+        if not reg_root:
+            return set()
+        return {n for n, _ in G.scan_skills_dir(reg_root)}
+    except Exception:
+        return set()
+
+
+def _wl_member(cmd):
+    """命令首段二进制是否在 registry 白名单内（与写远端 sudoers 同源，gen_sudoers）。"""
+    import shlex
+    try:
+        first = shlex.split(cmd.strip())[0] if cmd.strip() else ""
+    except ValueError:
+        return False
+    return bool(first) and first.rsplit("/", 1)[-1] in _allow_bins()
+
+
+def sudo_routed(target_name, cmd, targets=None):
+    """白名单即路由（B 轮 v2，docs/12 §5.6）公开谓词：白名单档上该命令能否
+    sudo 自动执行。只反映"目标能力 + 命令成员"两个静态事实（trust 状态由
+    调用方先判——root 档根本不会走到这个谓词，execute_mixed/gate 均如此）：
+      + ssh sudo_whitelist 目标（ro 账号）→ 命令首段二进制在 registry 名单内；
+      + 其他目标（root 直登等）恒 False。
+    """
+    targets = access.load_targets() if targets is None else targets
+    t = targets.get(target_name) or {}
+    if not t.get("sudo_whitelist") or t.get("user") != ENROLL_USER:
+        return False                           # root 直登目标：root 档语义，不路由
+    return _wl_member(cmd)
+
+
+
 def run_remote(target_name, cmd, *, params=None, targets=None,
                connector_fn=None, now=None):
     """把一条只读命令打到远端目标，返回 stdout。任何一关不过 → GateError（并审计）。
 
-    connector_fn: 便于测试注入的连接器 (target, cred, cmd) -> (rc, out, err)；
-                  默认按 target.connector 选真实连接器。
+    档位（B 轮 v2，docs/12 §5.6）：ssh 白名单目标按 trust 状态切档——
+      + root 档（已 grant）：管理账号（admin_user，缺省=targets.yaml 的 user）
+        直登原样执行（约束=客户端四闸 + 显式 grant + TTL）。
+      + 白名单档（未 grant）：ro 账号登录，名单内命令首段 sudo -n（远端物理闸
+        /etc/sudoers.d），名单外命令 → GateRemoteNotAllowed（调用方转贴回）。
+    非 ssh 连接器无档位（授权语义不变：trust 已 grant 才自动执行）。
+    connector_fn 便于测试注入 (target, cred, cmd) -> (rc, out, err)。
     """
     targets = access.load_targets() if targets is None else targets
     if target_name not in targets:
@@ -115,8 +179,21 @@ def run_remote(target_name, cmd, *, params=None, targets=None,
                 "connector": conn, "cmd": cmd, "decision": "deny", "reason": reason})
         raise GateError(reason)
 
-    # 2. 授权
-    if not is_authorized(target_name):
+    # 2. 授权档位（先判 root 档；白名单档只兜"不可升档"的情形）
+    #    root 档需要物理通道：非白名单目标照旧（user 直登）；白名单目标需要
+    #    admin_user（双装公钥）或登录用户本就非 ro。ro 账号且无 admin_user 时
+    #    grant 不能凭空给 root——sudoers 未放行的命令 ro 账号跑不动，此时即便
+    #    已 grant 也永远按白名单档路由（grant 只免去授权问答，不改变执行身份
+    #    ——"没通道不给假 root"）。
+    is_wl = conn == "ssh" and bool(t.get("sudo_whitelist"))
+    root_capable = (not is_wl) or bool(t.get("admin_user")) or \
+        t.get("user") != ENROLL_USER
+    root_tier = bool(is_authorized(target_name) and root_capable)
+    wl_tier = bool(not root_tier and is_wl and _wl_member(cmd))
+    if not root_tier and not wl_tier:
+        if is_wl:
+            # 白名单目标上的名单外命令：能力边界需贴回，不是"未授权"
+            raise GateRemoteNotAllowed(target_name, cmd)
         deny(f"目标 {target_name} 未授权自动执行——先 opsaxiom target grant {target_name}")
     # 3. 只读白名单（http 传方法，其余传命令）
     try:
@@ -131,14 +208,35 @@ def run_remote(target_name, cmd, *, params=None, targets=None,
         for bad in sweep.unsafe_values(params):
             if bad in cmd:
                 deny(f"param 注入被拒（值含 shell 元字符）：{bad!r}")
-    # 5. 解析凭证 + 执行
+    # 5. 解析凭证 + 执行（按档位切实际身份：root 档=admin 直登；白名单档=ro+首段 sudo）
     cred = access.resolve(t)
     fn = connector_fn or _default_connector(conn)
-    rc, out, err = fn(t, cred, cmd)
-    # 6. 审计（凭证绝不入审计——只记 kind，不记材料）
+    exec_as = t.get("user")                     # 实际执行身份（审计用）
+    exec_cmd = cmd
+    if conn == "ssh" and root_tier and t.get("admin_user"):
+        exec_as = t["admin_user"]               # root 档：管理账号直登（公钥已双装）
+    elif conn == "ssh" and wl_tier:
+        exec_as = ENROLL_USER
+        exec_cmd = "sudo -n " + cmd.strip()     # 白名单档：首段 sudo（远端物理闸）
+    if exec_as != t.get("user"):
+        t = dict(t); t["user"] = exec_as        # 连接身份切到 admin（ro 账号不变）
+    try:
+        rc, out, err = fn(t, cred, exec_cmd)
+    except Exception as e:                       # noqa: BLE001
+        # 连接器异常（连不上/执行超时）也审计——命令已打到远端，无痕即盲区；
+        # 空 str 异常（socket.timeout）记类名，别留空 err（真机教训）
+        _audit({"ts": _stamp(now), "target": target_name, "host": t.get("host"),
+                "connector": conn, "cmd": exec_cmd, "decision": "error",
+                "cred_kind": cred.kind, "exec_as": exec_as,
+                "tier": "root" if root_tier else "whitelist",
+                "err": (str(e).strip() or type(e).__name__)[:200]})
+        raise
+    # 6. 审计（凭证绝不入审计——只记 kind，不记材料；实际身份与档位单独记录）
     _audit({"ts": _stamp(now), "target": target_name, "host": t.get("host"),
-            "connector": conn, "cmd": cmd, "decision": "allow",
+            "connector": conn, "cmd": exec_cmd, "decision": "allow",
             "cred_kind": cred.kind, "exit": rc,
+            "exec_as": exec_as, "via_sudo": exec_cmd != cmd,
+            "tier": "root" if root_tier else "whitelist",
             "out_sha256": hashlib.sha256(out.encode("utf-8", "replace")).hexdigest()[:16],
             "out_bytes": len(out)})
     if rc != 0 and not out:

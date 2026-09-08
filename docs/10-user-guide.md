@@ -216,27 +216,35 @@ opsaxiom hub push <你的skill-id>          # 打成 bundle
 ### 5.1 第一次：把设备告诉它
 
 ```bash
-opsaxiom target add web-01          # 交互向导：连法(ssh/network/kubectl/http)、主机、凭证引用
+opsaxiom target add web-01          # 交互向导：连法(ssh/network/kubectl/http)、主机、端口、VPN 标签
 opsaxiom target import-ssh-config   # 或者：直接从你 ~/.ssh/config 批量导入（很多人早配好了）
 opsaxiom target doctor              # 体检：每台能不能连、凭证齐不齐、是不是要先连 VPN
 ```
 
-`target add` 时凭证一项选的是"钥匙去哪找"（agent/ssh_config/kubeconfig/钥匙串），
+Linux 机器上，`target add` 会**一站式开通**：你输一次 root 密码（只用这一次、
+不保存），它把你的公钥装到远端、建一个只读账号 `opsaxiom-ro`、并写入一份
+**只读命令白名单**（从 Skill 库自动生成——库里用什么命令就只放行什么）。之后
+它连这台机器永远用密钥，密码已丢。
 **清单里没有任何明文密码**。有密码类凭证（网络设备、API token）：
 `opsaxiom cred set core-sw-1`（值进系统钥匙串/加密文件，`cred list` 只显示名字）。
 
-### 5.2 授权它自动跑（按台、会过期）
+### 5.2 双档位：白名单档 → grant 升 root 档
+
+Linux 设备默认进**白名单档**：白名单内的命令（df、ss、journalctl 这些取证命令）
+它自动跑（远端 sudoers 物理把关），名单外的转成手工粘贴。想让全部只读命令自动跑：
 
 ```bash
-opsaxiom target grant web-01        # 允许它在这台上自动执行只读命令（默认 30 天到期）
-opsaxiom target list                # 看每台授权还剩几天
-opsaxiom target revoke web-01       # 随时收回
+opsaxiom target grant web-01        # 升 root 档：管理账号直登全量自动（默认 30 天到期）
+opsaxiom target list                # 看每台档位和授权还剩几天
+opsaxiom target revoke web-01       # 随时收回 → 退回白名单档（名单内照旧自动）
 ```
 
 ### 5.3 排查时它怎么干
 
-授权过的目标它自动跑只读命令、结果进卷宗；没授权/连不上的，它退化成"粘贴块"
-让你在目标上贴命令拷回来——**能自动的都自动，剩下的贴一下**，不会全有或全无。
+名单内/已授权的目标它自动跑只读命令、结果进卷宗；名单外/没授权/连不上的，它退化
+成"粘贴块"让你在目标上贴命令拷回来；自动执行失败的（比如全盘扫描超时）也会转成
+手工粘贴——**能自动的都自动，剩下的贴一下**，不会全有或全无。要是整台机器都连
+不上，它不会拿一堆命令逐条盘问你，而是一次性提示你先 `target doctor` 体检。
 要先连 VPN 的目标，它会说"先连上 VPN 再回车"，连上后接着跑，不用重来。
 
 ## 第六章 · 个性化（贴你自己的页面和习惯，又不改坏通用 Skill）

@@ -16,9 +16,15 @@ import argparse
 import os
 import pathlib
 import sys
+import warnings
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
+# .venv 里旧 cryptography 在 Py3.8 下每次连接都刷 CryptographyDeprecationWarning
+# （与产品逻辑无关的外部弃用告警）。警告由 cryptography 模块 import 期发出，
+# 过滤器须在它加载前按 message 正则注册（不能先 import 该异常类）。
+warnings.filterwarnings(
+    "ignore", message="Python 3.8 is no longer supported by the Python core team")
 import yaml            # noqa: E402
 import runtime         # noqa: E402
 

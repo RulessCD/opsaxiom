@@ -119,21 +119,28 @@ $ opsaxiom target enroll web-01 --host 10.0.1.11
    （已有密钥/ssh-agent 里有 → 跳过，用现成的）
 ② 首次上门需要临时用一次密码：
    请输入 root@10.0.1.11 的密码（只用这一次，不保存）: ****
-③ 远端开通（等价于 ssh-copy-id + 低权账号剧本）：
+③ 远端开通（等价于 ssh-copy-id + 低权账号剧本，一次连接全做完）：
+   - 公钥双装：你的公钥写进 root 与新账号两处 authorized_keys
+     （grant 升档切管理账号直登时不再要密码）
    - 创建 opsaxiom-ro 用户 + 写入 sudoers 只读白名单（从 Skill 库命令集生成）
-   - 把你的公钥写进 opsaxiom-ro 的 authorized_keys
+     —— ssh+linux 必建流程（非可选）
 ④ 验证：改用密钥以 opsaxiom-ro 登录 → 跑 3 条只读探针 → 🟢
-✔ 已写入 targets.yaml（auth: agent）。今后免密自动采集，密码已丢弃。
+✔ 已写入 targets.yaml（auth: agent，白名单档）。今后名单内命令免密自动采集，
+  密码已丢弃。需要全量自动 → target grant web-01（root 档）。
 ```
 
 要点：
 
 - **密码只在内存里用一次**（paramiko 交互认证），用完即弃，不进任何文件——
   这是"推完即弃"红线的又一次复用。
-- 不想给 root？`--no-create-ro` 退化成纯 ssh-copy-id（用你现有账号），
-  低权账号以后再补；`target doctor` 会持续黄牌提醒"这台用的是高权账号"。
+- **ssh+linux 必建 ro+白名单**（2026-09-08 与发起人确认）：没有"跳过 ro 直登
+  root"选项——root 直登口子挪到 grant（root 档），安全默认值=有远端物理闸的
+  白名单档。容器等建不出白名单的机器走失败兜底（见 §5.6 三句提示）。
+- **非 Linux（macos/freebsd）本就无 useradd/sudoers.d**——跳过 ro 账号流程，
+  用现有账号直登（等价 root 档语义：授权后原样执行、无远端闸）。
 - 已经有整套密钥/跳板体系的人**根本不需要 enroll**——`import-ssh-config`
-  即用（P0 的承诺：你能 ssh 通，OpsAxiom 就能）。
+  即用（P0 的承诺：你能 ssh 通，OpsAxiom 就能）；这类目标无白名单，恒 root
+  档（仅客户端闸），与 enroll 接入的机器并存。
 - 批量开通：`enroll --from hosts.txt`，逐台问密码或用同一密码（内存一次性）。
 - 网络设备/HTTP token 不走 enroll（多数不支持密钥），走 P1：
   `opsaxiom cred set core-sw-1` 存进本机钥匙串。
@@ -224,16 +231,70 @@ prod-cluster:
    就放行什么，一条不多。Skill 库更新时白名单剧本同步再生成。这是"技能库
    即权限清单"，是本产品独有的红利。
 
-   > **⚠ 现状标注（2026-09，真机验证结论）**：sudoers 白名单位于远端（用户账号
-   > 侧），但当前 runtime 执行链（gate → ssh_conn）从不发出 `sudo <命令>`——
-   > connector 以登录用户原样执行 skill 命令。因此白名单授权此刻**没有消费者**，
-   > 向导（target add）v1 已摘除写入步骤；低权账号 opsaxiom-ro 只建账号+公钥，
-   > 需 root 的探针会失败（属预期受限）。生成器（tools/authoring/gen_sudoers.py）
-   > 保留作为接线后的地基。接线方案（gate 识别 permission-denied → 自动
-   > `sudo -n` 回退重试一次 → visudo -c 校验后才落盘）见 B 轮计划
-   > `.claude/plans/remote-sudo-wiring.md`。教训已入库：**裸名二进制导致 sudoers
-   > 语法错误（须绝对路径）；引号内 `|` 会泄漏进切段结果；写入前必须 visudo -c，
-   > 坏白名单比没有白名单糟**。
+   > **✅ 已接线（2026-09-08，B 轮"白名单即路由表"）**：真机验证曾发现白名单
+   > 在 runtime 无消费者（connector 原样执行、从不发 sudo），v1 摘除后重设计
+   > 为"白名单即路由表"并接线：
+   > - **add 时刻**：展示白名单（来自 Skill 库命令集）→ 用户确认 → 远端
+   >   `command -v` 解析绝对路径 → 写 /tmp → `visudo -c` 校验 → 过了才落位
+   >   （校验不过不污染 /etc/sudoers.d——真机裸名 syntax error 教训）
+   > - **运行时**：`sudo_whitelist` 目标的探针命令，首段二进制在名单内 →
+   >   gate 自动 `sudo -n` 直跑（审计记 `via_sudo`）；名单外 → 降级人工贴回
+   >   （复用 mixed 交互，"能自动的自动、不能的举证"）
+   > - 同源同函数：白名单成员判断与写入远端用同一个 gen_sudoers，registry
+   >   缺失时 fail-closed（不提权，原样执行）
+   > - 抽取边界（三角教训）：引号内 `|` 不切段；只收首段（管道中段不提权
+   >   不收——消灭 bash/awk/env 越权主体）；解释器类（bash/awk/perl/python/
+   >   env/find/timeout/xargs/socat/nc）硬拒——经 sudo 可得 root shell；
+   >   白名单含 cat/head 等读文件类 → sudo 语境=可读全盘（取证语义，用户知情）
+   >
+   > **✅ 档位 v2（2026-09-08，与发起人三点确认后落地）**：白名单对 ssh+linux
+   > 是**必建流程**（不再可选），trust 状态决定执行档位：
+   >
+   > | 状态 | 名单内命令 | 名单外只读命令 |
+   > |---|---|---|
+   > | 仅 add（白名单档） | ✅ 自动，ro 账号首段 `sudo -n`（远端物理闸） | ⏳ 人工贴回 |
+   > | add + grant（root 档） | ✅ 自动，管理账号直登 | ✅ 自动（仅客户端四闸兜底） |
+   > | 白名单建立失败（兜底档） | ⏳ 全部人贴回 | ⏳ 全部人贴回 |
+   >
+   > - **方案 A（root 档的实现）**：开通时公钥**双装**（root 与 opsaxiom-ro 各
+   >   一把），targets.yaml 记 `admin_user`。grant 后 gate 切管理账号直登、命令
+   >   原样执行——不再走 sudo 路由（约束=客户端四闸：只读白名单/参数注入防护/
+   >   全量审计/模型不产命令 + TTL）。**诚实边界：root 档无远端物理闸**，这在
+   >   grant 提示语里明说；TTL 到期自动退回白名单档（不是退回全手动）。
+   > - **公钥双装失败 / PermitRootLogin no**：admin_user 不写入（或 root 档
+   >   不可用），自动停在白名单档；黄牌提示。
+   > - **失败兜底三句提示**（容器/受限镜像等建不出 ro+白名单的目标）：①低权
+   >   账号+白名单未能建立；②该目标仅受客户端约束；③命令只能人工执行贴回，
+   >   可 target grant 升级；并建议重跑 target add 重试。**无白名单不开自动
+   >   口子**（宁可此机功能受限）。
+   > - 非 Linux（macos/freebsd）跳过 ro 机制：本地高权账号直登 = 恒 root 档
+   >   语义（授权后原样执行，无远端闸——机制不可用，从始如实告知）。
+   > - **接入痕迹与清理（delete 的边界）**：ssh 开通（enroll）会在远端留痕迹：
+   >   只读账号 opsaxiom-ro、root 与 ro 两处 `authorized_keys` 公钥（双装时）、
+   >   `/etc/sudoers.d/opsaxiom-ro` 白名单。`target delete` 只清本机
+   >   （targets.yaml 条目 + 授权），**不自动清远端**——账号可能被其他客户端/流程
+   >   引用，是否清理由机器主人定；delete 输出会给出具体清理命令（rm sudoers 文件
+   >   + userdel -r）。
+   >
+   > **✅ 真机两档全验证（2026-09-08，高等云肆 Ubuntu 22.04）**：白名单档
+   > （名单内 10 条探针 ro+首段 `sudo -n` 全自动、名单外 find 落贴回）与 root 档
+   > （grant 后 root 直登、sudo 路由停用、名单外也自动）都按上表语义工作；
+   > 审计 tier/exec_as/via_sudo 与实际身份一致。"没通道不给假 root"（旧流程
+   > 开通、ro 账号无 admin_user 时 grant 不升档，提示重跑 add 补建）也验证。
+   > 验证途中暴露并修复（均带回归测试）：
+   > - **连接器异常分类**：连接失败（banner reset/拨不通）与命令超时（全盘
+   >   find）分开——`SSHConnectError` vs `SSHError`；paramiko 后台线程的
+   >   traceback 日志在连接器 import 时静音（两屏栈是噪声，错误已转译）。
+   > - **空错误消息兜底**：`socket.timeout` 的 `str()` 为空——报告/审计记
+   >   异常类名，永不出现"原因："空串。
+   > - **连接器异常也审计**（decision=error）：命令已打到远端，无痕即盲区。
+   > - **失败探针转贴回**：自动执行失败/超时的探针并入手动桶逐条贴回（复用
+   >   nonce 交互），卷宗证据不因一条慢命令缺失；唯"全部探针均为连接级失败"
+   >   时 fail-fast——连不上时贴回无从谈起，一次性给 target doctor 指引。
+   > - **授权问答按档位接线**：白名单目标在批量取证路径也不问"授权自动
+   >   取证？"（add 时刻确认白名单=授权点）；档位提示语按目标只打一次。
+   > - `df -i --output` 与 GNU 互斥 → `df -i -P`（inode-exhausted 上轮漏修、
+   >   live registry 未同步——registry 是唯一权威源，改动需两处同步提交）。
 
 ## 6. 易用性设计（把"配置"变成"确认"）
 

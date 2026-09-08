@@ -372,3 +372,33 @@ hardware_exit done 写法），G-3 保持纯 Diagnostic，得以 sim_verified。
   systemd-unit-failed(restart)、clock-drift(timesync restart)、
   k8s.release.rollback(kubectl rollout undo transaction)、bgp.neighbor-down(配置类)。
   待 Fable 决定：是否为 restart/transaction 类回滚补 mock 回放器（新回滚模式=Fable 设计，B13）。
+
+## B 轮收尾（Opus，第十七轮，待 Fable 评审）
+
+**v2 档位真机两档全验证通过**（白名单档/root 档/没通道不给假 root 三场景，见 HANDOFF
+第十七轮），验证途中暴露并修复 8 项。以下是要点与需 Fable 复核的判断：
+
+1. **失败探针转贴回的信任边界**：自动执行失败/超时的探针按 cmd 并入手动桶走 nonce
+   贴回——错误输出（如部分超时后远端已产生的stdout 残段）不会入事实库（连接器
+   异常路径直接 raise，无 stdout），但**贴回内容本身**依然是"人在真机跑的"同一
+   信任级别，nonce 防伪造边界不变。请复核"失败转贴回"是否引入把别的命令输出
+   贴错位置的新混淆面（现状：贴回 UI 每条单独显示命令行，OnTrack）。
+2. **SSHConnectError 边界**：ssh_conn 用 `connected` 标志位区分 connect 前/后
+   失败。banner reset 恰好发生在 connect 成功后、exec 前——归"连接失败"是刻意的
+   （ hadn't started executing）。若 Fable 认为应以 exec_command 调用为界，改一行。
+3. **fail-fast 条件**：全部探针失败 且 全部为连接级失败 且 manual 桶为空 → 短路。
+   连接级判定靠错误文本含"连接"——脆弱（异常消息改文案会失灵），待 Fable 定夺
+   是否升级为结构化 status（error 报告加 `err_kind: connect|timeout|exec`）。
+4. **paramiko 全局日志静音**（连接器 import 即 CRITICAL）：影响面是"任何 import
+   ssh_conn 的进程"——如果未来需要在排障时看 paramiko 内部日志，需要临时开关。
+5. **registry 同步纪律**（流程教训，建议固化）：修 skill 探针必须同时改仓库存档
+   与 ~/.opsaxiom/hub/registry（独立 git 仓库）两份——本轮 inode-exhausted 上轮
+   漏修 + registry 未同步，真机暴露。是否在 docs/07 生成规范里立条？
+
+## B 轮全量修复清单（对账）
+
+df -i --output 互斥（仓库+registry 双修，inode-exhausted 是上轮漏网）；批量路径
+白名单授权问答；提示语按目标去重；socket.timeout 空 str 兜底（连接器/审计/sweep
+三处）；失败探针转贴回 + 连接级全灭 fail-fast；连接器异常 decision=error 审计；
+paramiko traceback 静音；SSHConnectError/SSHError 分类；弃用告警入口过滤；
+target list os 列 + grant/revoke picker 过滤。全部带测试，789 passed。

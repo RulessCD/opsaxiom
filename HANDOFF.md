@@ -39,14 +39,103 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-03（第十五轮：远程 target REPL 接线 + 真机端到端验证完成）
+- **更新时间**：2026-09-08（第十七轮：B 轮真机两档全验证 + 8 项真机暴露修复）
 - **更新者**：Opus 4.8（工程实现）
-- **阶段**：**第十五轮（第二/三轮交互重构 + I-12 远程接线 + 真机验证）完成，774 pytest 全绿（仅 2 个模型检测环境既有失败，与代码无关），交回 Fable 评审**
-- **第十五轮交付**：
-  - **I-12 远程 target REPL 接线（接线完成 + 真机验证）**：
-    - **远程目标选择** `_pick_remote_target`（列设备+os+host，序号/回车选择）；
-    - **os 过滤扩展到远程**（`_os_ok_for_target` 重构：local 按本机 os / remote 按 targets.yaml
-      的 os 字段 / manual 不过滤；macos/darwin 双向别名——platform.system() 返回 darwin 而用户说 macos）；
+- **阶段**：**第十七轮（v2 档位真机验证收官）代码完成，789 pytest 绿（2 个 model_cli
+  环境既有失败），B 轮全部落地，待交 Fable 评审**
+- **第十七轮交付（真机 高等云肆 Ubuntu 22.04:32147 两档全验证 + 验证途中暴露 8 问题）**：
+  - **白名单档端到端 ✅**：批量取证路径白名单目标免问答直进；名单内 10 条探针
+    （df/lsof/du/dmesg/mount/iostat）ro 账号首段 `sudo -n` 全自动；名单外 find
+    落人工贴回；审计 10 条全 tier=whitelist/exec_as=opsaxiom-ro/via_sudo=True。
+  - **root 档端到端 ✅**：delete→add 重建（root 密钥通道验证"grant 升档后可管理
+    账号直登"）→ grant → root 直登全量自动（含名单外 find）；审计全 tier=root/
+    exec_as=root/via_sudo=False。公钥双装全流程真机走通。
+  - **"没通道不给假 root" 真机验证 ✅**：旧流程开通（ro 无 admin_user）grant 后
+    提示保持白名单档、重跑 add 可补建管理通道升 root 档——grant 只免去授权问答、
+    不改变执行身份。
+  - **真机暴露 bug 修复（8，均带回归测试）**：
+    1. `df -i --output` GNU 互斥：inode-exhausted 上轮**漏修** + live registry
+       （~/.opsaxiom/hub/registry，运行时唯一权威源）**两处都没同步**——仓库与
+       registry 双修（disk-full 两处 + inode-exhausted 一处 → `df -i -P`）。
+       教训：**修探针必须同时修 registry 副本**（registry 是独立 git 仓库）。
+    2. 批量取证路径白名单目标仍弹授权问答（上轮只接了单 Skill 路径）→
+       `_ensure_authorized` 白名单短路（与单路径一致）。
+    3. 白名单档提示语随 execute_mixed 每探针重复打印 → 按目标去重只打一次。
+    4. find 全盘扫描 60s 超时 → 空错误消息（socket.timeout 的 str() 为空）→
+       连接器转译"命令执行超时（>60s）——重活考虑贴回人工执行"+ sweep/审计
+       异常类名兜底（永不出空"原因："）。
+    5. 失败探针转贴回：自动执行失败/超时的探针并入手动桶逐条贴回（nonce 交互
+       复用）；唯"全部為连接级失败"时 fail-fast 不盘问（连不上贴回无从谈起，
+       一次性给 target doctor 指引）。混合失败真机验证通过（1 连接失败 +
+       1 超时 → 2 条转贴回 → 证据补齐卷宗全证实）。
+    6. 连接器异常审计（decision=error，tier/exec_as/err）——超时命令已打到
+       远端，无痕即盲区。
+    7. paramiko transport 后台线程 traceback 噪声静音（连接器 import 即设
+       CRITICAL——banner reset 曾刷两屏栈）。
+    8. CryptographyDeprecationWarning 入口按 message 过滤（须在 cryptography
+       import 前注册 message 正则过滤器，不能先 import 异常类）。
+  - **连接失败/命令失败分类**：ssh_conn 新增 `SSHConnectError`（connect 前）vs
+    `SSHError`（exec 后）——错误消息分别带 target doctor / 贴回指引。
+  - **target CLI 打磨**：list 加 os 列；grant/revoke picker 按 grant 状态过滤
+    （ungranted/granted，空列表诚实提示，delete 不滤）；grant 后按通道分级提示
+    （root 档 / 保持白名单档+补建指引）。
+  - 测试：**789 passed / 4 skipped**（2 test_model_cli 环境既有失败；新增
+    混合失败/空 err/连接器异常审计等对抗测试）。
+- **registry 侧（独立仓库 opsaxiom-registry）**：host.storage.capacity.disk-full
+  与 host.storage.inode-exhausted 的 `df -i -P` 修复已改入本地缓存并随本仓库
+  B 轮一起说明；registry 仓库 git 提交/push 由发起人决定时机。
+- **十七轮 Fable 评审重点**：
+  1. 真机暴露的 8 修复是否引入新攻击面（特别是失败转贴回是否可能把错误输出
+     当证据入库——ingest 的 nonce 防伪造边界仍保护着这条路径）。
+  2. SSHConnectError/SSHError 两类异常的边界（connected 标志位）是否可靠。
+  3. fail-fast 条件（全部失败且全是连接级 + manual 桶为空）的完备性。
+  4. paramiko 全局日志静音是否影响其他模块的排障需求（需要时可临时打开）。
+
+---
+
+## 历史状态存档（第十六轮，I-4 enroll + B 轮 v2 档位）
+- **第十六轮交付（2026-09-08，commit 3bf9579 之后）**：
+  - **I-4 enroll 整合 target add（真机验证通过，commit 3bf9579）**：ssh 首次开通一站式
+    （本机密钥检测/生成 → getpass 密码一次上门 → 公钥写入 → os 探测 → ro 账号+白名单 →
+    密钥验证）；密码零痕迹（getpass/函数局部/用完即 del，对抗测试 grep 全树）。
+  - **sudoers 白名单三角教训修复（gen_sudoers v2）**：真机暴露三问题逐一根治——
+    裸名是 sudoers syntax error（远端 `command -v` 解析绝对路径 + visudo -cf 校验，
+    过了才 install 落位）；引号内 `|` 泄漏成员（引号感知切段状态机）；只收首段
+    （管道中段收了=扩权）。解释器类（bash/awk/perl/python/env/find/timeout/xargs/
+    socat/nc）硬拒（GTFOBins root shell）；action 节点结构性排除。
+  - **B 轮"白名单即路由表"（v1→摘除→v2 档位）**：
+    - 发现白名单无 runtime 消费者后摘除 v1，与发起人重新确认设计后按 B 接线。
+    - **档位 v2（发起人三点确认）**：ssh+linux **必建** ro+白名单
+      （向导去掉"是否创建"[Y/n]——root 直登口子挪到 grant）；trust 状态切档：
+      白名单档（未 grant）名单内命令 ro 账号首段 `sudo -n`（远端物理闸）/
+      名单外 GateRemoteNotAllowed 转贴回；root 档（已 grant）admin_user（公钥
+      **双装**：root+ro 两处）直登原样执行——不再 sudo 路由，仅客户端四闸+TTL，
+      grant 提示语明说"无远端物理闸"，revoke 退回白名单档（不是全手动）。
+    - 白名单建立失败/用户拒绝 → 兜底三句提示（①未建立②仅客户端约束③只能人工
+      贴回可 grant/重跑 add 重试）——无白名单不开自动口子。
+    - gate 审计新增 `exec_as`/`tier` 字段；删除 `_sudo_route`，新谓词
+      `_wl_member`（纯静态：目标能力+命令成员，trust 由调用方先判）。
+  - **真机暴露 bug 修复（2）**：`_store_result` 缺 `now` 形参 4 处旧调用点崩溃
+    （默认 None）；`_ensure_authorized` 远程 auto_count 恒 0 静默降级（去掉
+    `p["auto"]` 条件——授权判定只看参数齐备，能否自动由路由决定）。
+  - **delete 远端痕迹提示**：ro 账号/白名单（及双装公钥）痕迹 + 清理命令提示
+    （delete 不自动清远端——账号可能被别处引用）。
+  - **ro 问题仅 ssh+linux 出现**（darwin/freebsd 无 useradd/sudoers.d，跳过并说明）。
+- **十六轮遗留的评审重点（已随十七轮真机验证收紧，仍交 Fable）**：
+  1. 档位 v2 语义：root 档（grant 后 admin 直登、无远端闸）与"白名单必建"的组合
+     ——真机已双向验证（见十七轮）。
+  2. gate 两类拒绝语义：未授权 GateError vs 白名单档名单外 GateRemoteNotAllowed。
+  3. execute_mixed 档位分流顺序与 repl `_routed_remote` 双保险的等价性。
+  4. 删除白名单确认问题后"用户拒绝写入"路径（wl_attempted 区分）。
+
+---
+
+## 历史状态存档（第十五轮，I-12 远程接线）
+- **第十五轮交付（2026-09-03）**：远程 target REPL 接线 + 真机端到端验证完成，774 pytest 全绿
+  （仅 2 个模型检测环境既有失败，与代码无关）。
+  - **远程目标选择** `_pick_remote_target`（列设备+os+host，序号/回车选择）；
+    **os 过滤扩展到远程**（`_os_ok_for_target` 重构：local 按本机 os / remote 按 targets.yaml
+    的 os 字段 / manual 不过滤；macos/darwin 双向别名——platform.system() 返回 darwin 而用户说 macos）；
     - **v2 批量远程取证** `_sweep_remote`：`mixed_sweep` → gate.run_remote 自动执行已授权探针，
       未授权/不可达降级**逐条粘贴**（保持与手动模式一致的 UX）；交互授权回调 `_ensure_authorized`（y → TTL 30 天）。
     - **v1 单 Skill 远程协驾**（真机验证时的关键补线）：`_run` 按 target_mode 分流——remote 时

@@ -9,6 +9,7 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import gate  # noqa: E402
+import sweep  # noqa: E402
 
 
 def _setup(tmp_path, monkeypatch, authorized=True):
@@ -85,3 +86,109 @@ def test_denials_are_audited(tmp_path, monkeypatch):
         gate.run_remote("web-01", "rm -rf /", connector_fn=fn, now="T")
     rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
     assert rec["decision"] == "deny"                 # 被拦的写命令也留痕（安全事件）
+
+
+# ---------- B 轮 v2：档位切换（root 档直登 / 白名单档 sudo 路由 / 名单外贴回） ----------
+
+def _setup_wl(tmp_path, monkeypatch, allowed_bins, target_user="opsaxiom-ro",
+              sudo_whitelist=True, monkey_reg=True, authorized=False,
+              admin_user=None):
+    """sudo_whitelist 目标 + 可控白名单 registry 缓存。authorized 控制 root 档。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    t = {"connector": "ssh", "host": "10.0.0.9", "user": target_user, "auth": "agent"}
+    if sudo_whitelist:
+        t["sudo_whitelist"] = True
+    if admin_user:
+        t["admin_user"] = admin_user
+    (tmp_path / "targets.yaml").write_text(yaml.safe_dump({"targets": {"web-01": t}},
+                                               allow_unicode=True), encoding="utf-8")
+    if authorized:
+        # grant_trust 用当前时间，TTL 恒未过期（手写 granted_at 会随真实时间过期）
+        sweep.grant_trust("web-01", ttl_days=30, scope="readonly")
+    # 造一个 mini registry：一个 skill 用 df（名单内），一个用 lsof（可不在名单）
+    if monkey_reg:
+        sk = tmp_path / "hub" / "registry" / "skills" / "t.x" / "0.1.0" / "skill.yaml"
+        sk.parent.mkdir(parents=True)
+        sk.write_text(yaml.safe_dump({
+            "metadata": {"id": "t.x"}, "tree": {"entry": "c", "nodes": [
+                {"id": "c", "type": "check", "run": {"linux": f"{sorted(allowed_bins)[0]} /x"}}]}}),
+            encoding="utf-8")
+
+    def fake_conn(target, cred, cmd):
+        return 0, f"ran:{target.get('user')}:{cmd}", ""
+    return fake_conn
+
+
+def test_whitelist_tier_sudo_prefixes_member(tmp_path, monkeypatch):
+    """白名单档（未授权）+ 名单内命令 → ro 账号 + 首段 sudo -n，审计 tier=whitelist。"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"})
+    out = gate.run_remote("web-01", "df -B1 /", connector_fn=fn, now="T")
+    assert out == "ran:opsaxiom-ro:sudo -n df -B1 /"
+    rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
+    assert rec["via_sudo"] is True and rec["tier"] == "whitelist"
+    assert rec["exec_as"] == "opsaxiom-ro"
+
+
+def test_whitelist_tier_non_member_raises_not_allowed(tmp_path, monkeypatch):
+    """白名单档 + 名单外命令 → GateRemoteNotAllowed（能力边界转贴回，非安全拒绝）。"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"})
+    with pytest.raises(gate.GateRemoteNotAllowed):
+        gate.run_remote("web-01", "lsof -i", connector_fn=fn, now="T")
+
+
+def test_root_tier_direct_admin_login(tmp_path, monkeypatch):
+    """root 档（已 grant）+ admin_user → 切管理账号直登，命令原样（不查名单、不加 sudo）。"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"}, sudo_whitelist=True,
+                   authorized=True, admin_user="root")
+    out = gate.run_remote("web-01", "lsof -i", connector_fn=fn, now="T")
+    assert out == "ran:root:lsof -i"                      # 名单外也自动，admin 直登
+    rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
+    assert rec["tier"] == "root" and rec["exec_as"] == "root" and rec["via_sudo"] is False
+
+
+def test_root_tier_without_admin_user_uses_login_user(tmp_path, monkeypatch):
+    """root 档但无 admin_user 字段（旧条目）→ 用 targets.yaml 的 user 直登，不加 sudo。
+    （登录用户本就非 ro——非白名单目标或 root 登录，通道天然存在。）"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"}, sudo_whitelist=True,
+                   authorized=True, target_user="root")
+    out = gate.run_remote("web-01", "lsof -i", connector_fn=fn, now="T")
+    assert out == "ran:root:lsof -i"
+
+
+def test_granted_ro_without_admin_stays_whitelist_tier(tmp_path, monkeypatch):
+    """已 grant 但 ro 账号且无 admin_user（旧流程开通）→ "没通道不给假 root"：
+    仍按白名单档路由（名单内 sudo、名单外 GateRemoteNotAllowed），
+    grant 只免去授权问答、不改变执行身份。"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"}, sudo_whitelist=True,
+                   authorized=True)          # ro 账号、无 admin_user、已 grant
+    out = gate.run_remote("web-01", "df -B1 /", connector_fn=fn, now="T")
+    assert out == "ran:opsaxiom-ro:sudo -n df -B1 /"   # 白名单档路径，不假 root
+    with pytest.raises(gate.GateRemoteNotAllowed):
+        gate.run_remote("web-01", "lsof -i", connector_fn=fn, now="T")
+
+
+def test_unauthorized_non_member_target_still_denied(tmp_path, monkeypatch):
+    """非白名单目标未授权 → 还是"未授权"拒绝（ denies 也审计）。"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"}, sudo_whitelist=False)
+    with pytest.raises(gate.GateError, match="未授权"):
+        gate.run_remote("web-01", "uptime", connector_fn=fn, now="T")
+
+
+def test_sudo_route_not_applied_to_root_target(tmp_path, monkeypatch):
+    """root 直登目标（无 sudo_whitelist 标记、未授权）→ 未授权拒绝（不进白名单档）。"""
+    fn = _setup_wl(tmp_path, monkeypatch, {"df"}, target_user="root",
+                   sudo_whitelist=False)
+    with pytest.raises(gate.GateError, match="未授权"):
+        gate.run_remote("web-01", "df -B1 /", connector_fn=fn, now="T")
+
+
+def test_sudo_routed_predicate_static_semantics(tmp_path, monkeypatch):
+    """sudo_routed 谓词是纯静态判定（目标能力+命令成员），不读 trust——
+    root 档/白名单档的选择由调用方（execute_mixed/gate.run_remote）先判授权。"""
+    _setup_wl(tmp_path, monkeypatch, {"df"}, monkey_reg=True)
+    assert gate.sudo_routed("web-01", "df -B1 /") is True      # 白名单目标+名单内
+    assert gate.sudo_routed("web-01", "lsof -i") is False      # 名单外
+    sweep.revoke_trust("web-01")
+    assert gate.sudo_routed("web-01", "df -B1 /") is True      # trust 不影响谓词
+

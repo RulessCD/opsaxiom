@@ -29,12 +29,12 @@ tree:
     type: check
     title: 确认是否 inode 耗尽
     run:
-      linux: df -i --output=ipcent / | tr -dc '0-9\n' | tail -1
-    parser: generic/count-v1
+      linux: df -i -P /
+    parser: table/df-inode-v1
     branch:
-    - when: output.value >= 95
+    - when: rows[0].ipcent >= 95
       goto: find_dirs
-    - when: output.value < 95
+    - when: rows[0].ipcent < 95
       goto: done_not_inode
     otherwise: find_dirs
     cautions:

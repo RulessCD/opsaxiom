@@ -65,7 +65,7 @@ def _parse(cmd, parser, stdout):
     return out
 
 
-def _store_result(store, probe, stdout, now):
+def _store_result(store, probe, stdout, now=None):
     parsed = _parse(probe["cmd"], probe.get("parser"), stdout)
     store.put_parsed(probe["cmd"], parsed, target=probe.get("target", LOCAL),
                      parser=probe.get("parser"), now=now)
@@ -132,15 +132,21 @@ def classify_target(name, targets=None, authorized=None, reachable=None):
 
 
 def execute_mixed(plan, params, store, *, targets=None, now=None,
-                  local_runner=None, remote_runner=None, authorized=None):
+                  local_runner=None, remote_runner=None, authorized=None,
+                  sudo_routed=None):
     """混合取证：本机探针走 bash，远程已授权目标走 gate，未授权/不可达目标跳过
     （由调用方渲染成粘贴块）。返回 {executed:[...], manual:{target:[probe,...]}}。
 
     remote_runner: (target_name, cmd, params) -> stdout，默认 gate.run_remote。
     authorized: name -> bool，默认 gate.is_authorized（读 trust）。
+    sudo_routed: (target_name, cmd) -> bool——白名单档分流（B 轮 v2）：仅对
+                  【未授权】的 sudo_whitelist ssh 目标有意义（root 档直登不路由）；
+                  返回 False = 名单外 → 降级贴回（人工举证）。None = 接 gate 同源谓词。
     """
     import gate
     authorized = authorized or gate.is_authorized
+    if sudo_routed is None:
+        sudo_routed = gate.sudo_routed            # 默认接 gate 同源判定
     remote_runner = remote_runner or (
         lambda tn, cmd, pr: gate.run_remote(tn, cmd, params=pr, now=now))
     local_runner = local_runner or _default_runner
@@ -148,7 +154,6 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
     executed, manual = [], {}
     for p in flatten(plan):
         tname = p["target"]
-        conn = p.get("connector", "ssh")
         # 本机探针：沿用 execute_auto 的注入/只读双闸
         if tname == LOCAL:
             if not p["auto"] or any(v in p["cmd"] for v in bad) or not _is_readonly(p["cmd"]):
@@ -156,23 +161,49 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
             try:
                 out = local_runner(p["cmd"])
             except Exception as e:                       # noqa: BLE001
+                msg = str(e).strip() or type(e).__name__   # 空 str 异常兜底（真机教训）
                 executed.append({"node": p["node"], "cmd": p["cmd"],
-                                 "status": "error", "err": str(e)})
+                                 "status": "error", "err": msg})
                 continue
             parsed = _store_result(store, p, out, now)
             executed.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",
                              "target": tname,
                              "fields": [k for k in parsed if k not in ("rows", "lines")]})
             continue
-        # 远程目标：只在"已授权且该 connector 可自动"时走 gate，否则降级粘贴
-        mode, _ = classify_target(tname, authorized=authorized)
-        if mode != "auto" or any(v in p["cmd"] for v in bad):
-            manual.setdefault(tname, []).append(p); continue
+        # 远程目标分流（B 轮 v2 档位，docs/12 §5.6）：
+        # 白名单目标（ssh + sudo_whitelist）分两档——
+        #   root 档（已 grant 且有通道：admin_user 或登录用户非 ro）= 管理账号
+        #     直登，与普通目标同闸（classify 决定）；
+        #   白名单档（未 grant，或 ro 账号且无 admin_user——没通道不给假 root）
+        #     = 名单内命令 sudo 自动（远端物理闸），名单外贴回。
+        # 判定顺序关键：先看授权（root 档豁免名单检查），再按名单分流。
+        # 与 gate.run_remote 的 root_capable 同条件（gate 是执行时二次确认）。
+        t_entry = {}
+        t_is_wl = False
+        try:
+            import access as _access
+            t_entry = _access.load_targets().get(tname) or {}
+            t_is_wl = bool(t_entry.get("sudo_whitelist"))
+        except Exception:
+            t_entry, t_is_wl = {}, False
+        root_capable = (not t_is_wl) or bool(t_entry.get("admin_user")) or \
+            t_entry.get("user") != "opsaxiom-ro"
+        if t_is_wl and not (authorized(tname) and root_capable):
+            # 白名单档：只放行名单内（sudo_routed 谓词含成员判定）
+            if any(v in p["cmd"] for v in bad) or not sudo_routed(tname, p["cmd"]):
+                manual.setdefault(tname, []).append(p); continue
+        else:
+            # root 档 / 普通目标：授权闸照旧（未授权 → paste）
+            mode, _ = classify_target(tname, authorized=authorized)
+            if mode != "auto" or any(v in p["cmd"] for v in bad):
+                manual.setdefault(tname, []).append(p); continue
         try:
             out = remote_runner(tname, p["cmd"], params)
         except Exception as e:                       # noqa: BLE001
+            # str(e) 可能为空（socket.timeout 等真机教训）——诚实标明异常类名
+            msg = str(e).strip() or type(e).__name__
             executed.append({"node": p["node"], "cmd": p["cmd"], "status": "error",
-                             "target": tname, "err": str(e)})
+                             "target": tname, "err": msg})
             continue
         parsed = _store_result(store, p, out, now)
         executed.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",

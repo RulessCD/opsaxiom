@@ -233,18 +233,39 @@ class Repl:
             tname = self.remote_target_name
             if not tname:
                 print("  没有选中远程目标。"); return
-            # 授权检查
+            # 授权档位（B 轮 v2）：白名单目标未 grant 也可进（add 时刻已确认过
+            # 白名单=授权点，名单外命令 gate 会转贴回）；非白名单目标维持
+            # "先问再授"（grant 落 trust，TTL 30 天）。
             if not sweep.is_trusted(tname):
-                print(f"\n  {tname} 上可自动执行只读取证命令（绝不含写操作）。")
+                t_entry = {}
                 try:
-                    ans = input("  授权在目标上自动取证？一次性，30 天后到期 [y/N]: ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    ans = ""
-                if ans.lower() in ("y", "yes", "是"):
-                    sweep.grant_trust(tname, ttl_days=30, scope="readonly")
+                    t_entry = access.load_targets().get(tname) or {}
+                except access.AccessError:
+                    t_entry = {}
+                is_wl = (t_entry.get("connector") == "ssh"
+                         and bool(t_entry.get("sudo_whitelist")))
+                if not is_wl:
+                    print(f"\n  {tname} 上可自动执行只读取证命令（绝不含写操作）。")
+                    try:
+                        ans = input("  授权在目标上自动取证？一次性，30 天后到期 [y/N]: ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        ans = ""
+                    if ans.lower() in ("y", "yes", "是"):
+                        sweep.grant_trust(tname, ttl_days=30, scope="readonly")
+                    else:
+                        print("  未授权，无法自动执行。请使用 target grant 指令授权后重试。"); return
                 else:
-                    print("  未授权，无法自动执行。请使用 target grant 指令授权后重试。"); return
-            remote_runner = lambda cmd, pr=None: gate.run_remote(tname, cmd, params=pr)
+                    print(f"  {tname} 为白名单档：名单内命令免密自动执行，"
+                          f"名单外命令将提示人工贴回。")
+            # B 轮 v2 档位：档位判定单点在 gate——白名单目标名单外命令由 gate 抛
+            # GateRemoteNotAllowed，这里转 runtime 语义（Session 转贴回）；
+            # 名单内 gate 自动 sudo、已 grant 目标 admin 直登（方案 A）。
+            def _routed_remote(cmd, pr=None, _tn=tname):
+                try:
+                    return gate.run_remote(_tn, cmd, params=pr)
+                except gate.GateRemoteNotAllowed as e:
+                    raise runtime.RemoteNotAllowed(str(e)) from e
+            remote_runner = _routed_remote
             mode_label = "协驾档（远程自动执行）"
         elif self.target_mode == "manual":
             remote_runner = None
@@ -961,14 +982,36 @@ class Repl:
                     print(f"  → 模型建议再看：run {sid}（库内 Skill，徽章以库为准）")
 
     # ---------- 远程取证 ----------
+    _wl_notice_shown = None          # 白名单档提示每目标只打一次（execute_mixed 每探针查授权）
+
+    @staticmethod
+    def _is_whitelist_target(target_name):
+        """白名单目标判定（ssh + sudo_whitelist）。加载失败按非白名单处理。"""
+        try:
+            t = access.load_targets().get(target_name) or {}
+        except access.AccessError:
+            return False
+        return t.get("connector") == "ssh" and bool(t.get("sudo_whitelist"))
+
     def _ensure_authorized(self, target_name, inc):
-        """交互授权回调：已授权→True；未授权→问用户一次。用户同意则记 TTL 30 天。"""
+        """交互授权回调：已授权→True；未授权→问用户一次。用户同意则记 TTL 30 天。
+        白名单目标不问（add 时刻确认白名单=授权点；名单内命令免密自动，名单外
+        由 execute_mixed 落贴回桶）——与 v2 档位设计一致，不能反转。
+        execute_mixed 对每条探针都调本回调，提示语按目标只打一次。"""
         if sweep.is_trusted(target_name):
+            return True
+        if self._is_whitelist_target(target_name):
+            if self._wl_notice_shown != target_name:
+                self._wl_notice_shown = target_name
+                print(f"  {target_name} 为白名单档：名单内命令免密自动执行，"
+                      f"名单外命令将提示人工贴回。")
             return True
         plan = inc.plan()
         auto_count = sum(
             1 for p in sweep.flatten(plan)
-            if p["target"] == target_name and p["auto"] and runtime.MISSING not in p["cmd"]
+            # 远程探针的 p["auto"] 恒 False（build_plan 只给本机标 auto），
+            # 能不能自动由 classify/白名单路由决定——授权判定只看参数是否齐备
+            if p["target"] == target_name and runtime.MISSING not in p["cmd"]
         )
         if auto_count == 0:
             return False               # 全是手动指令，不需要授权
@@ -1017,14 +1060,34 @@ class Repl:
                     print(f"  ❌ {r.get('target',''):<12} {r['cmd']}\n"
                           f"     原因：{str(r.get('err', r['status']))[:200]}")
 
-        # 手动桶：逐条交互
+        # 手动桶：逐条交互。自动执行失败/超时的探针并入贴回——不晾在 ❌ 上，
+        # 慢命令（如全盘 find）超时后由人工执行补齐证据。
+        # 例外：全部失败且是连接级故障（连不上，非命令本身问题）→ 不逐条盘问
+        # 贴回（贴了也没意义，人同样连不上），一次性给修复指引。
         manual_items = []
         for tname, probes in manual.items():
             for p in probes:
                 manual_items.append((tname, p))
+        failed = [r for r in executed if r["status"] != "executed"]
+        connect_failed = sum(1 for r in failed if "连接" in str(r.get("err", "")))
+        if failed and connect_failed and connect_failed == len(failed) and not manual_items:
+            print("\n  ✘ 目标连不上（全部探针均连接失败，非命令问题）——"
+                  "检查 VPN/网络后用 target doctor 体检，再重跑本诊断；"
+                  "本轮不转人工贴回（你同样连不上该目标）。")
+            inc.dry_run()
+            print(inc.render_dossier())
+            self.last_incident_swept = True
+            return
+        failed_cmds = {r["cmd"] for r in failed}
+        if failed_cmds:
+            already = {p["cmd"] for _, p in manual_items}
+            for p in sweep.flatten(inc.plan()):
+                if p["cmd"] in failed_cmds and p["cmd"] not in already:
+                    manual_items.append((p["target"], p))
 
         if manual_items:
-            print(f"\n  ── 需手动执行 {len(manual_items)} 条 ──")
+            extra = f"（含 {len(failed_cmds)} 条自动执行失败，转人工贴回）" if failed_cmds else ""
+            print(f"\n  ── 需手动执行 {len(manual_items)} 条 ──{extra}")
             for tname, p in manual_items:
                 label = f" [{tname}]" if tname != I.LOCAL else ""
                 print(f"\n  请在目标上执行并粘贴输出（END 结束）{label}：\n  $ {p['cmd']}")
