@@ -41,8 +41,9 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 - **更新时间**：2026-09-09（十七轮二轮返工：F-19~F-23 全修，白名单 v3 语义）
 - **更新者**：Opus 4.8（工程实现）
-- **阶段**：**Fable 二轮复核（F-19~F-23）返工批已全部执行，813 passed / 5 skipped
-  全绿，待 Fable 复核**
+- **阶段**：**Fable 二轮复核裁定【合并】（3d53739），P2 随手修已落（3c02d8a，
+  813 passed / 5 skipped）。唯一待决：F-26（mount/conntrack/kafka-topics.sh
+  三个写面裸名条目，见 REVIEW-QUEUE）需发起人二选一后即可真机回归+push**
 - **二轮返工交付（对应 REVIEW-QUEUE"十七轮二轮返工对账"，Fable 复核结论）**：
   - **F-19（P0）白名单 v3**：flag 前缀条目结构性禁止（flag 与命令词正交，
     `--failed *` 挡不住 `--failed restart`）。复合型只认只读子命令白名单
