@@ -90,7 +90,13 @@ _DENY_BINS = {"mysql", "mysqldump", "psql", "mongosh", "mongo", "redis-cli",
               #   判定照常，白名单档收不到 sudo 即转贴回。
               "sysctl", "smartctl", "chronyc", "coredumpctl", "tcpdump",
               "modprobe", "insmod", "rmmod", "blockdev", "hdparm",
-              "dmidecode"}
+              "dmidecode",
+              # F-26（发起人裁定收窄，2026-09-09）：裸名条目 = 任意参数含写动作——
+              #   mount /dev/x /mnt（挂载任意盘）/ conntrack -D（删状态表）/
+              #   kafka-topics.sh --create --delete（写 Kafka 元数据）。
+              # 自动路径客户端 _is_readonly 本就拦住，物理面（持 ro 凭据者直接
+              # sudo -n）不再放行；相关 skill 探针白名单档转贴回。
+              "mount", "conntrack", "kafka-topics.sh"}
 
 
 def split_segments(cmd):

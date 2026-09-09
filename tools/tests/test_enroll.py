@@ -153,6 +153,26 @@ def test_b1_gate_has_teeth():
     assert violations, "牙口失效：掺入 B-1 缺陷条目未被断言体拦截（F-20 复发）"
 
 
+def test_f26_write_face_bins_never_whitelisted():
+    """F-26 回归（发起人裁定收窄）：mount/conntrack/kafka-topics.sh 绝不
+    入白名单——裸名条目=任意参数含写动作（挂任意盘/删状态表/写 Kafka）。
+    直接断言 extract 对它们零产出；真 registry 若在场也断言渲染无此行。"""
+    assert G.extract_entries("mount /dev/vdb /mnt") == set()
+    assert G.extract_entries("conntrack -L") == set()
+    assert G.extract_entries("kafka-topics.sh --list --bootstrap-server x") == set()
+    assert "mount" in G._DENY_BINS and "conntrack" in G._DENY_BINS \
+        and "kafka-topics.sh" in G._DENY_BINS
+    root = G.default_skills_root()
+    if root:
+        usage = G.scan_skills_dir(root)
+        text = G.render_sudoers_file(set(usage), user="opsaxiom-ro",
+                                     bin_paths={b: f"/usr/bin/{b}"
+                                                for b, _p in usage})
+        for b in ("mount", "conntrack", "kafka-topics.sh"):
+            assert f"/usr/bin/{b}" not in text or b not in text, \
+                f"F-26 回归：{b} 回归白名单"
+
+
 def test_flag_prefix_form_fail_closed():
     """v3（F-19）语义反转：flag 前缀不再是放行形态——flag 与命令词正交
     （systemd CLI），`--failed *` 这类条目挡不住其后的写子命令/写 flag。

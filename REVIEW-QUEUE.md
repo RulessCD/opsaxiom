@@ -459,10 +459,10 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   （F-24）；对称性近似函数补"裸名条目=任意参数"支路（sudoers(5) 手册语义，
   F-25）；flock/nsenter/unshare/setpriv/capsh/machinectl 入 _INTERPRETERS
   防御纵深（F-27）。近似函数教训补入 T-6。
-- **F-26（P2，待发起人裁定）**：现网 sudoers 仍有三个写面裸名条目——mount
-  （root 挂载任意盘）/conntrack（-D 删状态表）/kafka-topics.sh（--create/
-  --delete/--alter 写 Kafka）。自动路径被客户端 _is_readonly 拦住，物理面
-  （持 ro 凭据者直接 sudo -n）开着——超出"读侧全盘"既往裁定范围，下轮二选一：
-  入 _DENY_BINS 收窄（3 个 skill 探针转贴回），或明示接受。
+  防御纵深（F-27）。近似函数教训补入 T-6。
+- **F-26（P2，发起人裁定收窄，已执行）**：mount/conntrack/kafka-topics.sh 入
+  _DENY_BINS（2026-09-09）——裸名条目=任意参数含写动作（挂任意盘/删状态表/
+  写 Kafka），物理面关闭；自动路径不变（本就被客户端拦）；相关 skill 探针
+  白名单档转贴回。回归测试 test_f26_write_face_bins_never_whitelisted。
 - 真机回归清单（对应 HANDOFF 待办①）新增一条：`sudo -n systemctl --failed
   restart nginx` 须被远端拒（F-19 专属探针）。
