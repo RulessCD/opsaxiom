@@ -3,7 +3,8 @@ opsaxiom doctor —— 部署后自检（V-1）。红黄绿输出，也是日后
 
 检查项分三类：
   必需（红）：python 版本、pyyaml/jsonschema、tools/bin 可执行、~/.opsaxiom 可写
-  推荐（黄）：cryptography（Ed25519 签名，缺则 attest 降级 HMAC）、pytest、ntc-templates
+  推荐（黄）：cryptography（Ed25519 签名，缺则 attest 降级 HMAC）、pytest、ntc-templates、
+             paramiko（远程 SSH/网络自动执行，缺则远程探针降级人工贴回）
   连接器（黄/灰）：ssh/kubectl/mysql/redis-cli 是否在 PATH（缺只影响对应域的真实执行）
 """
 import os
@@ -53,9 +54,13 @@ def run():
     crypto = _check_import("cryptography")
     rows.append((OK if crypto else WARN, "cryptography (Ed25519)",
                  "已装" if crypto else "缺失→attest 降级 HMAC(不可跨主体验证)"))
-    for mod in ("pytest", "ntc_templates"):
+    for mod in ("pytest", "ntc_templates", "paramiko"):
         ok = _check_import(mod)
-        rows.append((OK if ok else WARN, f"可选 {mod}", "已装" if ok else "未装(部分功能受限)"))
+        if mod == "paramiko":
+            rows.append((OK if ok else WARN, f"可选 {mod}",
+                         "已装" if ok else "未装(远程 SSH/网络设备自动执行不可用，降级人工贴回)"))
+        else:
+            rows.append((OK if ok else WARN, f"可选 {mod}", "已装" if ok else "未装(部分功能受限)"))
 
     # --- 连接器 ---
     for tool, dom in [("ssh", "host/aicomp"), ("kubectl", "k8s"), ("mysql", "middleware/mysql"),

@@ -402,3 +402,25 @@ df -i --output 互斥（仓库+registry 双修，inode-exhausted 是上轮漏网
 三处）；失败探针转贴回 + 连接级全灭 fail-fast；连接器异常 decision=error 审计；
 paramiko traceback 静音；SSHConnectError/SSHError 分类；弃用告警入口过滤；
 target list os 列 + grant/revoke picker 过滤。全部带测试，789 passed。
+
+## 十七轮 Fable 返工对账（Opus，待 Fable 复核）
+
+Fable 评审裁定"暂缓合并"附 3 返工 + 2 P2 补账，已全部执行（分支待合并）：
+- **B-1（P0，已修）**：enroll 渲染 sudoers 把 (bin, prefix) 降成裸名 → 前缀全丢
+  （`sudo -n systemctl restart nginx` 物理可达）。修复：gen_sudoers 复合型二进制
+  （systemctl/journalctl/ip 等 _COMPOSITE_LEAD）只按已登记子命令/flag 前缀发条目
+  （`bin p *` + `bin p` 双形态，sudoers fnmatch 语义），裸名仅限单用途二进制；
+  复合型裸探针零条目 fail-closed；enroll/target_cli/gate._wl_member 全链路
+  (bin,prefix) 同源（客户端成员判定 = 远端 sudoers，互证测试
+  test_wl_member_prefix_mirror_matches_sudoers + 裸 systemctl 物理不在场回归）。
+- **裁定 3（P1，已修）**：err_kind 结构化（connect/timeout/exec 按异常类，
+  gate.err_kind 弃"错误文本含'连接'"）——gate/sweep 报告带 err_kind，
+  repl fail-fast 按【目标×err_kind 聚合】判定死目标（全部 connect 才短路，
+  活目标照常贴回）。对抗测试：rc 级失败 err 含"连接"→ err_kind=exec 不短路；
+  双目标 web-01 全灭（短路）+ web-02 rc 级含"连接"（照常贴回入库）。
+- **docs/07 T 补账（P2，已落笔）**：T-3（F-16 元字符）/T-4（F-17 出站文本）
+  八轮裁决欠账 + 新 T-5（错误分类结构化）/T-6（registry 同步纪律，回应"是否立条"）。
+- **发起人裁定（cat/grep）**：白名单语义=写侧焊死、读侧全盘（sudo -n cat 可读
+  root 文件属接受范围），cat/grep 保留不移——白名单的价值在防写不在防读。
+- **P2 未做**：_DENY 写动词补 systemctl/ip 子命令（黑名单补刀，白名单+前缀门后
+  收益边际，Fable 认可延后）。

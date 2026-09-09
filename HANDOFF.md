@@ -39,11 +39,35 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-08（第十七轮：B 轮真机两档全验证 + 8 项真机暴露修复）
+- **更新时间**：2026-09-09（第十七轮 Fable 返工批：B-1 sudoers 前缀 + err_kind 结构化 + T 补账）
 - **更新者**：Opus 4.8（工程实现）
-- **阶段**：**第十七轮（v2 档位真机验证收官）代码完成，789 pytest 绿（2 个 model_cli
-  环境既有失败），B 轮全部落地，待交 Fable 评审**
-- **第十七轮交付（真机 高等云肆 Ubuntu 22.04:32147 两档全验证 + 验证途中暴露 8 问题）**：
+- **阶段**：**Fable 评审"暂缓合并"的返工批已全部执行，813 pytest 全绿（历史首次无既有失败），
+  待 Fable 复核后合并**
+- **十七轮返工交付（对应 REVIEW-QUEUE"十七轮 Fable 返工对账"段）**：
+  - **B-1（P0）sudoers 前缀闸**：enroll 渲染时 (bin,prefix) 被降成裸名 → 复合型
+    二进制（systemctl 等）任意子命令 root 可达。修复四件套：gen_sudoers 复合型
+    只发"已登记子命令/flag 前缀"条目（`bin p *` + `bin p` 双形态，裸名仅限单用途
+    二进制，复合型裸探针零条目 fail-closed）；enroll/target_cli 传全 entries；
+    gate._wl_member 与远端 sudoers 同源判定（互证测试）；写子命令物理不在场
+    回归（test_b1_write_subcommand_physically_absent，扫真 registry 渲染断言）。
+  - **裁定 3（P1）err_kind 结构化**：错误分类弃"文本含'连接'"改异常类判定
+    （gate.err_kind → connect/timeout/exec）；gate/sweep 报告带 err_kind；repl
+    fail-fast 按【目标×全部 connect】聚合判死，死目标一次性指引不贴回、活目标
+    照常贴回（修复了评审发现的"死目标短路把活目标贴回一并跳过"实现偏差）。
+    对抗测试：rc 级 err 含"连接"→ 不短路；双目标死/活分流（贴回证据入库断言）。
+  - **发起人裁定（cat/grep 保留）**：白名单语义=写侧焊死/读侧全盘，sudo -n cat
+    读 root 文件属接受范围——白名单价值在防写不在防读。
+  - **docs/07 T 补账**：T-3（F-16 元字符，八轮欠账）/T-4（F-17 出站文本，八轮欠账）
+    /新 T-5（错误分类结构化）/新 T-6（registry×仓库双份事实同步纪律）。
+  - **搭车债**：paramiko 入 requirements（带用途注释）+ doctor 可选检查；
+    docs/12:128 enroll 输出示例改诚实表述；model_cli check_local_ready 注入
+    system 参数（2 条长期环境失败转绿）；P2 _DENY 黑名单补刀 Fable 认可延后。
+  - 测试：**813 passed / 4 skipped**（本轮 +8：gate 互证/物理不在场/err_kind 对抗、
+    repl 死活分流对抗、enroll 边界）。
+- **下一步**：① 真机两档回归（sudoers 条目形态变了，远端需重跑 add + visudo 校验）
+  → ② Fable 复核返工批 → ③ 合并 main 并 push。待办（发起人）：#12 opsaxiom
+  update 子命令、#13 气隙离线包。
+- **十七轮主体交付（返工前的真机收官记录，2026-09-08）**：
   - **白名单档端到端 ✅**：批量取证路径白名单目标免问答直进；名单内 10 条探针
     （df/lsof/du/dmesg/mount/iostat）ro 账号首段 `sudo -n` 全自动；名单外 find
     落人工贴回；审计 10 条全 tier=whitelist/exec_as=opsaxiom-ro/via_sudo=True。
@@ -84,11 +108,12 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 - **registry 侧（独立仓库 opsaxiom-registry）**：host.storage.capacity.disk-full
   与 host.storage.inode-exhausted 的 `df -i -P` 修复已改入本地缓存并随本仓库
   B 轮一起说明；registry 仓库 git 提交/push 由发起人决定时机。
-- **十七轮 Fable 评审重点**：
+- **十七轮 Fable 评审焦点（返工批已回应）**：
   1. 真机暴露的 8 修复是否引入新攻击面（特别是失败转贴回是否可能把错误输出
      当证据入库——ingest 的 nonce 防伪造边界仍保护着这条路径）。
   2. SSHConnectError/SSHError 两类异常的边界（connected 标志位）是否可靠。
-  3. fail-fast 条件（全部失败且全是连接级 + manual 桶为空）的完备性。
+  3. fail-fast 条件（全部失败且全是连接级 + manual 桶为空）的完备性
+     —— 已按裁定 3 改为 err_kind 结构化聚合，见上方返工交付。
   4. paramiko 全局日志静音是否影响其他模块的排障需求（需要时可临时打开）。
 
 ---

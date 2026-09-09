@@ -192,3 +192,85 @@ def test_sudo_routed_predicate_static_semantics(tmp_path, monkeypatch):
     sweep.revoke_trust("web-01")
     assert gate.sudo_routed("web-01", "df -B1 /") is True      # trust 不影响谓词
 
+
+# ---------- 十七轮返工：B-1 复合型前缀 + err_kind 结构化（裁定 3）----------
+
+def _setup_wl_entries(tmp_path, monkeypatch, entries, cmd_probe):
+    """可控白名单 registry：直接给定 gen_sudoers 条目（比 _setup_wl 灵活，
+    复合型前缀测试需精确控制 (bin, prefix) 集合）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    sk = tmp_path / "hub" / "registry" / "skills" / "t.x" / "0.1.0" / "skill.yaml"
+    sk.parent.mkdir(parents=True, exist_ok=True)
+    sk.write_text(yaml.safe_dump({
+        "metadata": {"id": "t.x"}, "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "check", "run": {"linux": cmd_probe}}]}}),
+        encoding="utf-8")
+    return entries
+
+
+def test_wl_member_composite_prefix_scoped(tmp_path, monkeypatch):
+    """B-1：复合型二进制（systemctl）成员判定须带已登记子命令——未登记写
+    子命令（restart）与非登记裸形态一律 False（远端物理闸同源）。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    assert gate._wl_member("systemctl is-active nginx") is True
+    assert gate._wl_member("systemctl restart nginx") is False   # 写子命令未登记
+    assert gate._wl_member("systemctl") is False                 # 无前缀 fail-closed
+    assert gate._wl_member("df -B1 /") is False                  # 不在名单
+    # 非复合型裸名即过：再造 df 条目
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 /")
+    assert gate._wl_member("df -B1 /") is True
+
+
+def test_wl_member_prefix_mirror_matches_sudoers(tmp_path, monkeypatch):
+    """客户端成员判定与远端 sudoers 条目【同源】：客户端放行的形态 =
+    sudoers 里存在的形态。用同一条 skill 产出的 entries 互证。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    import gen_sudoers as G
+    entries = gate._allow_entries()
+    assert ("systemctl", "is-active") in entries
+    text = G.render_sudoers_file(sorted(entries), user="opsaxiom-ro",
+                                 bin_paths={"systemctl": "/usr/bin/systemctl"})
+    assert "systemctl is-active *" in text
+    assert gate._wl_member("systemctl is-active x") is True
+
+
+def test_gate_audits_error_kind(tmp_path, monkeypatch):
+    """连接器异常审计带 err_kind；SSHError（exec 级）不误标 connect。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 /")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    (tmp_path / "targets.yaml").write_text(yaml.safe_dump({"targets": {
+        "web-01": {"connector": "ssh", "host": "10.0.0.9", "user": "opsaxiom-ro",
+                   "auth": "agent", "sudo_whitelist": True},
+    }}, allow_unicode=True), encoding="utf-8")
+
+    def boom(target, cred, cmd):
+        from connectors.ssh_conn import SSHError
+        raise SSHError("SSH 执行失败：x")
+    with pytest.raises(Exception):
+        gate.run_remote("web-01", "df -B1 /", connector_fn=boom, now="T")
+    rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
+    assert rec["decision"] == "error" and rec["err_kind"] == "exec"
+
+
+# ---------- Fable 裁定 3 对抗：错误文本不可作为 fail-fast 信号 ----------
+
+def test_rc_level_failure_with_connect_word_is_exec_not_connect(tmp_path, monkeypatch):
+    """对抗（裁定 3 核心）：rc 级失败的消息拼了远端 stderr——中文报错常含
+    "连接"二字，若靠文本匹配会误判成连接级。err_kind 按异常类判定：
+    SSHError("...连接...") 必须是 exec，而不是 connect。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 /")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    (tmp_path / "targets.yaml").write_text(yaml.safe_dump({"targets": {
+        "web-01": {"connector": "ssh", "host": "10.0.0.9", "user": "opsaxiom-ro",
+                   "auth": "agent", "sudo_whitelist": True},
+    }}, allow_unicode=True), encoding="utf-8")
+
+    def boom(target, cred, cmd):
+        from connectors.ssh_conn import SSHError
+        raise SSHError("远端返回码 2：无法连接到数据库服务器")   # rc 级，但含"连接"
+    with pytest.raises(Exception):
+        gate.run_remote("web-01", "df -B1 /", connector_fn=boom, now="T")
+    rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
+    assert rec["err_kind"] == "exec"          # 文本含"连接"≠连接级
+    assert gate.err_kind(Exception("连接超时")) == "exec"   # 裸 Exception 同样从宽
+

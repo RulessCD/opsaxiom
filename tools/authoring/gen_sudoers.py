@@ -28,6 +28,13 @@ import yaml
 
 # 段切分（引号感知版）：复合命令连接符（管道 + 逻辑符 + 分号）
 _SEG_RE = re.compile(r"&&|\|\||;|\|")
+# 复合型二进制：首个参数是"子命令"且部分子命令带写能力（systemctl restart/
+# ip link set/journalctl --vacuum）。这类**禁止回退裸名**（args 任意 = 写能力
+# 通行，十七轮评审 B-1：远端 physical 闸形同虚设）——只按见到的
+# 子命令/flag 前缀放行，未见前缀的形态 fail-closed（该探针转贴回）。
+# 语义固定单用途的二进制（df/du/lsof/smartctl…）不受此限，裸名无人参问题。
+_COMPOSITE_LEAD = {"systemctl", "journalctl", "timedatectl", "networkctl",
+                   "ip", "nft", "iptables", "firewall-cmd"}
 # shell 控制词与重定向段不算白名单内容
 _CTRL = {"for", "if", "then", "else", "fi", "do", "done", "while", "case", "esac",
          "in", "echo", "true", "false", "exit", "return", "export", "set", "cd",
@@ -110,21 +117,37 @@ def extract_entries(cmd):
         return out
     if not re.match(r"^[A-Za-z0-9_.@+\-]+$", name):
         return out
-    # 首个非 flag token 作为参数前缀（systemctl is-active → "is-active"）；
-    # 二进制直跟 flag（如 df -h / ps aux）→ 无前缀（全参放行）
-    j = i + 1
-    while j < len(toks):
-        t = toks[j]
-        if t.startswith("-") or re.match(r"^\d*>", t) or t in _CTRL:
-            j += 1
-            continue
-        if re.match(r"^[A-Za-z][A-Za-z0-9_-]*$", t):
-            # 模板占位符段（{{...}} 会被渲染）不算固定参数
-            if "{{" not in seg:
-                out.add((name, t))
+    # 前缀 = 二进制后的第一个"有区分度"的 token（仅对复合型二进制有意义）：
+    #   - 子命令词（systemctl is-active → "is-active"）
+    #   - flag（systemctl --failed / journalctl --disk-usage / journalctl -u）：
+    #     flag 也能区分形态，取为前缀放行 `bin <flag> *`
+    # 复合型二进制（_COMPOSITE_LEAD）【不登记裸名】——裸名 = 任意参数 = 写子命令
+    # 通行（B-1）；未见前缀（纯 {{...}} 等）时对复合型返回空（fail-closed）。
+    # 非复合型维持 v2 语义：裸名一条（args 任意，语义固定无节制必要）。
+    prefix = None
+    if name in _COMPOSITE_LEAD:
+        j = i + 1
+        while j < len(toks):
+            t = toks[j]
+            if t in _CTRL or re.match(r"^\d*>/", t):    # 控制词/段内重定向跳过
+                j += 1
+                continue
+            if re.match(r"^\d*>", t):                    # 段尾重定向（2>/dev/null 自身）
+                break
+            if t.startswith("-"):
+                prefix = t
+                break
+            if re.match(r"^[A-Za-z][A-Za-z0-9_@.+-]*[A-Za-z0-9_-]$", t) or \
+                    re.match(r"^[A-Za-z]$", t):
+                # 模板占位符段（{{...}} 会被渲染）不算固定参数
+                if "{{" not in t:
+                    prefix = t
+                break
             break
-        break
-    out.add((name, None))                  # 无参形态也登记一份（args 任意）
+    if name not in _COMPOSITE_LEAD:
+        out.add((name, None))              # 单用途二进制：裸名形态（args 任意）
+    if prefix is not None:
+        out.add((name, prefix))
     return out
 
 
@@ -195,17 +218,20 @@ def _group_by_bin(entries):
 
 def _entry_specs(entries):
     """{(bin, prefix|None)} → 排序后的 sudoers 片段列表。
-    同 bin 若存在 None（无固定子命令 → 参数任意），裸 bin 覆盖一切前缀条目；
-    否则每个前缀一条 `bin prefix *`。specs 为裸名形态——写远端前由 enroll
-    经 `command -v` 解析为绝对路径后重渲染（sudoers 要求绝对路径）。"""
+    非 None 前缀 → `bin prefix *` + 裸 `bin prefix` 两条（sudoers 参数匹配是
+    fnmatch 整串，`prefix *` 只匹配带参形态，无参调用需裸前缀条覆盖——
+    B-1 修复时实测确认）。None 前缀（裸名，args 任意）只出现在非复合型
+    二进制上（复合型在 extract_entries 已禁止裸名登记，B-1）。
+    specs 为裸名形态——写远端前由 enroll 经 `command -v` 解析为绝对路径后
+    重渲染（sudoers 要求绝对路径）。"""
     specs = []
     by_bin = _group_by_bin(entries)
     for name in sorted(by_bin):
-        prefixes = by_bin[name]
-        if None in prefixes:
-            specs.append(name)
-        else:
-            specs.extend(f"{name} {p} *" for p in sorted(prefixes))
+        for p in sorted(by_bin[name], key=lambda x: (x is not None, x or "")):
+            if p is None:
+                specs.append(name)
+            else:
+                specs.extend([f"{name} {p} *", f"{name} {p}"])
     return specs
 
 

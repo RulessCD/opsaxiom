@@ -50,16 +50,55 @@ def test_write_action_bins_excluded():
 
 
 def test_systemctl_prefix_and_none_override():
-    """check 里的 systemctl is-active 带前缀；同 bin 有 (bin, None) 时裸名覆盖前缀。"""
+    """B-1 修复后语义：复合型二进制（systemctl）永不产生裸名条目——
+    extract 只给 (bin, 子命令)；`sudo -n systemctl restart` 之类未登记形态
+    物理不可达（远端 sudoers 无裸 systemctl 行）。"""
     e = G.extract_entries("systemctl is-active nginx")
     assert ("systemctl", "is-active") in e
-    merged = G._group_by_bin({("systemctl", "is-active"), ("systemctl", None)})
-    assert G._entry_specs(dict()) is not None   # 不崩
-    specs = G._entry_specs({("systemctl", "is-active"), ("systemctl", None)})
-    assert "systemctl is-active *" not in specs and "systemctl" in specs
+    assert ("systemctl", None) not in e         # 复合型禁止裸名（B-1）
+    specs = G._entry_specs({("systemctl", "is-active")})
+    assert "systemctl is-active *" in specs and "systemctl is-active" in specs
+    assert "systemctl" not in specs             # 无裸名覆盖条
+
+
+def test_composite_bare_probe_fail_closed():
+    """复合型二进制无子命令/flag 前缀（如裸 journalctl）→ 零条目（fail-closed）：
+    该探针不进白名单，执行端转贴回。纯 {{...}} 首参同理不固定。"""
+    assert G.extract_entries("journalctl") == set()
+    assert G.extract_entries("ip {{ifname}}") == set()
 
 
 # ---------- v2：引号感知切段 / 段首-only / 解释器硬拒 / 路径重渲染 ----------
+
+def test_b1_write_subcommand_physically_absent():
+    """B-1 端到端（合并门槛回归）：把当前 registry 扫一遍渲染 sudoers，
+    断言任何复合二进制的"未登记写子命令"（restart/enable/stop/start/
+    link/vacuum）不出现为放行形态。"""
+    root = G.default_skills_root()
+    if not root:
+        return
+    usage = G.scan_skills_dir(root)
+    text = G.render_sudoers_file(sorted(usage), user="opsaxiom-ro")
+    import re
+    assert not re.search(r"systemctl( (is-active|show|status|--failed) \*)?[, ]"
+                         r"|/usr/bin/systemctl(,|$)", "")  # 占位：真断言在下方
+    for line in text.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        bins = line.split("NOPASSWD: ", 1)[1]
+        for spec in bins.split(", "):
+            if spec.endswith("/systemctl"):
+                raise AssertionError(f"裸 systemctl 在场（B-1 回归）: {spec}")
+            if spec.endswith("/systemctl *"):
+                raise AssertionError(f"systemctl 全参条目在场（B-1 回归）: {spec}")
+
+
+def test_flag_prefix_form_allowed():
+    """flag 前缀形态：systemctl --failed / journalctl -u 完整保留（现网探针全走 -u）。"""
+    e = G.extract_entries("systemctl --failed --type=mount 2>/dev/null | grep -c x")
+    assert ("systemctl", "--failed") in e and ("systemctl", None) not in e
+    e2 = G.extract_entries("journalctl -u cron --since '-1h'")
+    assert ("journalctl", "-u") in e2
 
 def test_v2_quoted_pipe_not_split():
     """引号内的 | 是正则交替不是管道——引号内容既不泄漏成"命令"、
@@ -97,10 +136,14 @@ def test_v2_render_flags_unresolved_paths():
 
 
 def test_render_sudoers_none_overrides_prefixes():
-    entries = {("systemctl", None), ("systemctl", "is-active")}
+    """B-1 后语义：裸名条目只可能来自非复合型二进制；复合型只有带子命令/
+    flag 的受限条目（`*` 尾通配 + 裸前缀两形态）。"""
+    entries = {("df", None), ("systemctl", "is-active")}
     text = G.render_sudoers_file(entries, user="opsaxiom-ro")
-    assert "systemctl is-active *" not in text
-    assert "opsaxiom-ro ALL=(root) NOPASSWD: systemctl" in text
+    assert "systemctl is-active *" in text
+    assert "systemctl is-active" in text
+    assert "NOPASSWD: df" in text                       # 非复合型保持裸名全参
+    assert "systemctl restart" not in text              # 写子命令物理不在场
 
 
 

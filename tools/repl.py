@@ -1062,23 +1062,36 @@ class Repl:
 
         # 手动桶：逐条交互。自动执行失败/超时的探针并入贴回——不晾在 ❌ 上，
         # 慢命令（如全盘 find）超时后由人工执行补齐证据。
-        # 例外：全部失败且是连接级故障（连不上，非命令本身问题）→ 不逐条盘问
-        # 贴回（贴了也没意义，人同样连不上），一次性给修复指引。
+        # 例外（fail-fast，按目标判定）：某目标【全部】探针均为连接级失败
+        # （err_kind==connect，弃错误文本匹配——远端 stderr 含"连接"不再是信号，
+        # 十七轮裁定 3）且无手动项 → 不逐条盘问（贴了也没意义，人同样连不上），
+        # 一次性给修复指引。多目标事件里只短路死目标，活目标照常取证。
         manual_items = []
         for tname, probes in manual.items():
             for p in probes:
                 manual_items.append((tname, p))
         failed = [r for r in executed if r["status"] != "executed"]
-        connect_failed = sum(1 for r in failed if "连接" in str(r.get("err", "")))
-        if failed and connect_failed and connect_failed == len(failed) and not manual_items:
-            print("\n  ✘ 目标连不上（全部探针均连接失败，非命令问题）——"
+        fails_by_target = {}
+        for r in failed:
+            tn = r.get("target", I.LOCAL)
+            fails_by_target.setdefault(tn, [0, 0])
+            fails_by_target[tn][0] += 1
+            if r.get("err_kind") == "connect":
+                fails_by_target[tn][1] += 1
+        dead = {tn for tn, (n_all, n_connect) in fails_by_target.items()
+                if n_connect == n_all}
+        dead_targets = {tn for tn in dead
+                        if not any(p[0] == tn or (p[0] == I.LOCAL and tn == I.LOCAL)
+                                   for p in manual_items)}
+        if dead_targets:
+            names = "、".join(sorted(dead_targets))
+            print(f"\n  ✘ {names} 连不上（该目标全部探针均连接失败，非命令问题）——"
                   "检查 VPN/网络后用 target doctor 体检，再重跑本诊断；"
-                  "本轮不转人工贴回（你同样连不上该目标）。")
-            inc.dry_run()
-            print(inc.render_dossier())
-            self.last_incident_swept = True
-            return
-        failed_cmds = {r["cmd"] for r in failed}
+                  "该目标本轮不转人工贴回（你同样连不上）。")
+        # 失败探针并入贴回，【死目标的除外】——你同样连不上，贴了也没意义；
+        # 活目标/非连接级失败的照常转人工补证据（裁定 3：按 err_kind 判，不猜文本）
+        failed_cmds = {r["cmd"] for r in failed
+                       if r.get("target", I.LOCAL) not in dead_targets}
         if failed_cmds:
             already = {p["cmd"] for _, p in manual_items}
             for p in sweep.flatten(inc.plan()):

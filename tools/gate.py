@@ -117,28 +117,66 @@ def _stamp(now=None):
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def _allow_bins():
-    """registry 白名单成员（裸名集合）。与写入远端 /etc/sudoers.d/opsaxiom-ro
-    的清单同源同函数（gen_sudoers）。算不出 → 空集（fail-closed：不提权）。"""
+def _allow_entries():
+    """registry 白名单成员（(bin, prefix|None) 全集）。与写入远端
+    /etc/sudoers.d/opsaxiom-ro 的清单同源同函数（gen_sudoers）。
+    算不出 → 空集（fail-closed：不提权）。"""
     try:
         sys.path.insert(0, str(HERE / "authoring"))
         import gen_sudoers as G
         reg_root = G.default_skills_root()
         if not reg_root:
             return set()
-        return {n for n, _ in G.scan_skills_dir(reg_root)}
+        return set(G.scan_skills_dir(reg_root))
     except Exception:
         return set()
 
 
+def _allow_bins():
+    """白名单裸名集合（展示用）。成员判定走 _wl_member（含复合型前缀检查）。"""
+    return {b for b, _p in _allow_entries()}
+
+
 def _wl_member(cmd):
-    """命令首段二进制是否在 registry 白名单内（与写远端 sudoers 同源，gen_sudoers）。"""
+    """命令是否在 registry 白名单内（与写远端 sudoers 同源，gen_sudoers）。
+    首段二进制在名单内还不够：复合型二进制（systemctl/ip/journalctl…，
+    gen_sudoers._COMPOSITE_LEAD）还须首个带区分度 token 匹配已登记
+    子命令/flag 前缀（B-1：远端 sudoers 按前缀放行，`systemctl restart`
+    之类未登记形态物理不可达；客户端同源判定，不给死路由）。"""
     import shlex
     try:
-        first = shlex.split(cmd.strip())[0] if cmd.strip() else ""
+        toks = shlex.split(cmd.strip())
     except ValueError:
         return False
-    return bool(first) and first.rsplit("/", 1)[-1] in _allow_bins()
+    if not toks:
+        return False
+    first = toks[0].rsplit("/", 1)[-1]
+    entries = _allow_entries()
+    if not any(b == first for b, _p in entries):
+        return False
+    try:
+        sys.path.insert(0, str(HERE / "authoring"))
+        import gen_sudoers as G
+        composite = first in G._COMPOSITE_LEAD
+    except Exception:
+        composite = True                # 分不清时按复合型从严
+    if not composite:
+        return True
+    # 复合型：首个 flag/子命令须在已登记前缀内（排队跳过 sudo 变体/控制词）
+    prefix = None
+    for tok in toks[1:]:
+        if tok in ("sudo", "-n", "-u") or tok in G._CTRL or \
+                (tok[:1].isdigit() and ">" in tok):
+            continue
+        if tok[:1] == ">":
+            continue
+        prefix = tok
+        break
+    if prefix is None:
+        return False                    # 复合型无前缀形态：物理闸关死，转贴回
+    return (first, prefix) in entries or \
+        any(b == first and str(p).startswith(prefix) and p is not None
+            for b, p in entries)
 
 
 def sudo_routed(target_name, cmd, targets=None):
@@ -224,11 +262,13 @@ def run_remote(target_name, cmd, *, params=None, targets=None,
         rc, out, err = fn(t, cred, exec_cmd)
     except Exception as e:                       # noqa: BLE001
         # 连接器异常（连不上/执行超时）也审计——命令已打到远端，无痕即盲区；
-        # 空 str 异常（socket.timeout）记类名，别留空 err（真机教训）
+        # 空 str 异常（socket.timeout）记类名，别留空 err（真机教训）；
+        # err_kind 结构化类别供上层 fail-fast 判定（不靠错误文本猜，裁定 3）
         _audit({"ts": _stamp(now), "target": target_name, "host": t.get("host"),
                 "connector": conn, "cmd": exec_cmd, "decision": "error",
                 "cred_kind": cred.kind, "exec_as": exec_as,
                 "tier": "root" if root_tier else "whitelist",
+                "err_kind": err_kind(e),
                 "err": (str(e).strip() or type(e).__name__)[:200]})
         raise
     # 6. 审计（凭证绝不入审计——只记 kind，不记材料；实际身份与档位单独记录）
@@ -242,6 +282,25 @@ def run_remote(target_name, cmd, *, params=None, targets=None,
     if rc != 0 and not out:
         raise GateError(f"远端执行返回码 {rc}：{err.strip()[:200]}")
     return out
+
+
+def err_kind(e):
+    """异常 → 结构化错误类别（十七轮评审裁定 3：fail-fast 判定弃用错误文本
+    匹配——远端 stderr 会拼进 err 消息（rc 分支），中文报错含"连接"二字会把
+    rc 级失败误判成连接级，整轮静默跳过贴回丢证据）。类别：
+      connect  连接级失败（拨不通/banner reset/VPN 抖动）——唯一可 fail-fast
+      timeout  执行超时（命令已到远端）→ 转贴回
+      exec     其他执行/连接器异常（含 SSHError）→ 转贴回
+      GateError 不经此（先于连接器抛出），unknown 从严不当作 connect"""
+    name = type(e).__name__
+    if name == "SSHConnectError":
+        return "connect"
+    if name in ("ConnectionError", "ConnectionResetError", "ConnectionRefusedError",
+                "NetworkDownError"):
+        return "connect"
+    if name in ("TimeoutError", "socket.timeout"):
+        return "timeout"
+    return "exec"
 
 
 def _default_connector(connector):

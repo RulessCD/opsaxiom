@@ -4,3 +4,4 @@ jsonschema>=4.20
 cryptography>=42.0   # attestation Ed25519 签名（未装时 attest 降级 HMAC 过渡）
 pytest>=8.0
 ntc-templates>=4.0   # 网络设备 CLI 解析（可选，未装时优雅降级）
+paramiko>=3.0        # SSH/网络设备连接器（远程自动执行专用引擎；未装时远程探针降级人工贴回，本机诊断与导航档不受影响）
