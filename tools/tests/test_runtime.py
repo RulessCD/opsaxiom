@@ -9,6 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "sim"))
 import runtime  # noqa: E402
+import parsers  # noqa: E402
 
 
 def _run_demo(demo_file, skill_id, tmp_home):
@@ -76,3 +77,73 @@ def test_render_template():
     # U-1：字段缺失但求值成功→None→⟨?⟩ 占位，不留语义黑洞
     assert render("共 {{gone}} 个", ctx) == "共 ⟨?⟩ 个"
     assert render("坏 {{nonexistent[9].x}}", ctx) == "坏 ⟨?⟩"
+
+
+# ---------- 回流点②：v1 处置消费 FactStore（发起人口径 2026-09-09）----------
+import facts as F  # noqa: E402
+
+def _mk_session(skill_id, answers, tmp_path, facts=None, facts_target=None, sid="t2"):
+    """带 facts 槽的会话构造（复用仓库存档 skill）；facts_target 对应入键 target。"""
+    p = next(x for x in (ROOT / "skills").rglob("skill.yaml")
+             if yaml.safe_load(x.read_text())["metadata"]["id"] == skill_id)
+    os.environ["OPSAXIOM_HOME"] = str(tmp_path)
+    io = runtime.IO(answers=answers, echo=False)
+    return runtime.Session(p, params={"mount": "/", "svc": "nginx"},
+                           mode="guided", io=io, sid="fx",
+                           facts=facts, facts_target=facts_target)
+
+
+def test_facts_hit_skips_paste(tmp_path):
+    """回流点②核心：batch 先采的证据（TTL 内）在续接的 v1 check 命中——
+    复用解析产物、不盘问粘贴（paste 被调用即失败：交互模式会阻塞读 stdin）。"""
+    import time
+    store = F.FactStore()
+    parsed = parsers.get_parser("table/df-v1")(
+        "target,size,used,avail,pcent\n/ 107374182400 102005473280 5368709120 95%")
+    store.put_parsed("df -B1 --output=target,size,used,avail,pcent /", parsed, target="dev-01")
+    os.environ["OPSAXIOM_HOME"] = str(tmp_path)
+    # monkeypatch IO.paste 计数——若被调用说明缓存未命中（纪律失败）
+    calls = []
+    orig = runtime.IO.paste
+    runtime.IO.paste = lambda self, node, prompt: (calls.append(node), "")[1]
+    try:
+        sess = runtime.Session(
+            next(x for x in (ROOT / "skills").rglob("skill.yaml")
+                 if yaml.safe_load(x.read_text())["metadata"]["id"]
+                 == "host.storage.capacity.disk-full"),
+            params={"mount": "/"}, mode="guided", io=runtime.IO(echo=False), sid="hit",
+            facts=store, facts_target="dev-01")
+        nxt = sess._do_check(sess.nodes["locate_mount"])
+        assert nxt == "check_inode"          # pcent>=90 分支在缓存产物上正常求值
+        assert sess.ctx["rows"][0]["pcent"] == 95   # 缓存值已灌进 ctx
+        assert any(r.get("reused") for r in sess.audit)   # 复用标记入审计
+        assert calls == []                    # 未盘问粘贴（命中即跳过）
+    finally:
+        runtime.IO.paste = orig
+
+
+def test_facts_expired_recollects(tmp_path, monkeypatch):
+    """过期事实不复用（诚实：宁可重采不给旧值）：ts 超 TTL → 缓存不命中，
+    走正常采集路径（answers 提供新输出）。"""
+    import time
+    parsed = parsers.get_parser("table/df-v1")(
+        "target,size,used,avail,pcent\n/ 107374182400 102005473280 5368709120 95%")
+    store = F.FactStore()
+    store._facts[F.make_key("dev-01",
+                            F.normalize_cmd("df -B1 --output=target,size,used,avail,pcent /"),
+                            F.BUNDLE)] = {
+        "key": "x", "value": parsed, "source_cmd": "df", "target": "dev-01",
+        "ts": time.time() - 999, "ttl": 300, "parser": "table/df-v1", "field": "*"}
+    os.environ["OPSAXIOM_HOME"] = str(tmp_path)
+    answers = {"locate_mount":
+               "target,size,used,avail,pcent\n/ 107374182400 102005473280 5368709120 10%"}
+    io = runtime.IO(answers=answers, echo=False)
+    sess = runtime.Session(
+        next(x for x in (ROOT / "skills").rglob("skill.yaml")
+             if yaml.safe_load(x.read_text())["metadata"]["id"]
+             == "host.storage.capacity.disk-full"),
+        params={"mount": "/"}, mode="guided", io=io, sid="exp",
+        facts=store, facts_target="dev-01")
+    nxt = sess._do_check(sess.nodes["locate_mount"])
+    assert nxt == "false_alarm"              # 用的是新采值（pcent 10<90），非缓存旧值 95
+    assert not any(r.get("reused") for r in sess.audit)

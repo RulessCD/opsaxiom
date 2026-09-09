@@ -176,3 +176,124 @@ def test_failfast_rc_level_connect_word_not_short_circuited(monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "连不上" not in out                        # 没有被误判成死目标
     assert "需手动执行" in out                        # 转贴回（不丢证据）
+
+
+# ---------- 回流点②：_offer_treatment 全量列出（发起人口径 2026-09-09）----------
+import yaml  # noqa: E402
+
+def _mk_pending_inc(monkeypatch, n_pending):
+    """构造 n 个 CONFIRMED+pending 假设的 incident（绕过干跑直接置状态）。"""
+    import incident as I
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    inc = I.Incident("卡")
+    for k in range(n_pending):
+        skill = {
+            "metadata": {"id": f"t.p{k}", "name": f"处置{k}", "maturity": "sim_verified",
+                         "taxonomy": "host/x"},
+            "tree": {"entry": "c", "nodes": [
+                {"id": "c", "type": "check", "run": {"linux": "cat /proc/loadavg"}},
+            ]},
+        }
+        inc.add_hypotheses([skill])
+        h = inc.hyps[-1]
+        h.status, h.terminal = I.CONFIRMED, f"action:c"
+        h.pending = {"kind": "action", "node": "c",
+                     "prompt": f"建议执行处置{k}", "risk": "中"}
+    return inc
+
+
+def test_offer_treatment_lists_all_pending(monkeypatch, capsys):
+    """多条可处置假设必须全部列出（修复原 return-早退只提第一条的静默缺陷）；
+    回车默认执行第 1 项。选择的假设进 _run_treatment。"""
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    r = repl.Repl()
+    r.last_hits = []
+    r.model_cfg = None
+    inc = _mk_pending_inc(monkeypatch, 3)
+    picked = {}
+    monkeypatch.setattr(r, "_run_treatment",
+                        lambda h, i: picked.setdefault("id", h.meta["id"]))
+    r._offer_treatment(inc)
+    out = capsys.readouterr().out
+    for k in range(3):
+        assert f"处置{k}" in out, f"第 {k} 项未列出:\n{out}"
+    assert picked["id"] == "t.p0"                    # 回车=默认第 1 项
+
+
+def test_offer_treatment_digit_selects_that_item(monkeypatch, capsys):
+    """输入序号 2 → 执行第二项。"""
+    monkeypatch.setattr("builtins.input", lambda *a: "2")
+    r = repl.Repl()
+    r.last_hits = []
+    r.model_cfg = None
+    inc = _mk_pending_inc(monkeypatch, 3)
+    picked = {}
+    monkeypatch.setattr(r, "_run_treatment",
+                        lambda h, i: picked.setdefault("id", h.meta["id"]))
+    r._offer_treatment(inc)
+    capsys.readouterr()
+    assert picked["id"] == "t.p1"
+
+
+def test_offer_treatment_q_skips(monkeypatch, capsys):
+    """q 跳过不处置，提示可手动 run。"""
+    monkeypatch.setattr("builtins.input", lambda *a: "q")
+    r = repl.Repl()
+    r.last_hits = []
+    r.model_cfg = None
+    inc = _mk_pending_inc(monkeypatch, 1)
+    picked = {}
+    monkeypatch.setattr(r, "_run_treatment",
+                        lambda h, i: picked.setdefault("id", h.meta["id"]))
+    r._offer_treatment(inc)
+    out = capsys.readouterr().out
+    assert "已跳过" in out
+    assert picked == {}
+
+
+def test_treatment_session_carries_facts(monkeypatch, capsys, tmp_path):
+    """_run_treatment 构造的 Session 必须持有 inc.store + inc.target
+    （回流点②透传），否则 TTL 内证据会在 v1 重跑重采。"""
+    import runtime
+    captured = {}
+
+    import incident as I
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    inc = I.Incident("卡")
+    skill = {
+        "metadata": {"id": "t.p9", "name": "处置", "maturity": "sim_verified",
+                     "taxonomy": "host/x"},
+        "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "action", "title": "t", "cmd": {"linux": "echo hi"},
+             "risk": "低"},
+        ]},
+    }
+    inc.add_hypotheses([skill])
+    h = inc.hyps[0]
+    h.status, h.terminal = I.CONFIRMED, "action:c"
+    h.pending = {"kind": "action", "node": "c", "prompt": "建议执行", "risk": "低"}
+
+    orig_init = runtime.Session.__init__
+
+    class _Stop(Exception):
+        pass
+
+    def spy_init(self, *a, **kw):
+        orig_init(self, *a, **kw)
+        captured["facts"] = self.facts
+        captured["target"] = self.facts_target
+        raise _Stop()                      # 短路 run，只验构造
+
+    monkeypatch.setattr(runtime.Session, "__init__", spy_init)
+    r = repl.Repl()
+    r.target_mode = "local"
+    # _find_skill 走 diagnose._SKILLS_CACHE（import 期按真实 HOME 定格，env 隔离
+    # 改不动它）——直接把模块属性指到 tmp，写一个临时 skill 让查找命中
+    sk_dir = tmp_path / "hub" / "registry" / "skills" / "t" / "p9"
+    sk_dir.mkdir(parents=True)
+    (sk_dir / "skill.yaml").write_text(yaml.safe_dump(skill), encoding="utf-8")
+    monkeypatch.setattr(repl.diagnose, "_SKILLS_CACHE", tmp_path / "hub" / "registry" / "skills")
+    with pytest.raises(_Stop):
+        r._run_treatment(h, inc)
+    assert captured["facts"] is inc.store
+    assert captured["target"] == inc.target

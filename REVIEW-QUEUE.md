@@ -478,3 +478,23 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   test_runtime_ro_leads_consumes_registry_not_mirror（并集联动断言）。
   教训：T-6 的"镜像"范畴从测试助手扩到【任何消费方之外的名单拷贝】——
   运行时执行门自己的手写动词表同样是镜像。
+
+## 回流点②收官（Opus，2026-09-09，发起人口径落地，待 Fable 复核）
+
+批量取证→确认假设→续接 v1 处置的证据交接落地，交互口径=发起人 2026-09-09 拍板：
+
+- **repl._offer_treatment 重写（P0）**：可处置（CONFIRMED+pending）假设**全部列出**
+  让用户选——回车=默认第 1 项，序号=指定项，q/否=跳过并提示可手动 run <id>。
+  修复原实现 return-早退只提第一条的静默缺陷（原 repl.py:972）。
+  回归 4 件：全量列出断言/序号选择/q 跳过/Session 持库断言（test_repl.py）。
+- **repl._run_treatment 新增（P0）**：查 skill → 构造 Session 时 `facts=inc.store,
+  facts_target=inc.target` 原样透传（与普通 run <id> 的唯一差别是事实库持有；
+  导航档语义——方案/简报/审批门/verify——完全不变）。
+- **runtime.Session facts 槽（P0）**：新增 `facts`/`facts_target` 槽 +
+  `_facts_hit`（走 FactStore 公共 API get_parsed；库异常不阻塞，退常规采集）+
+  `_absorb_parsed`（镜像 _parse_into_ctx 并入规则，但跳过再解析）。
+  `_do_check` 采集前先查库：命中→复用产物灌 ctx（audit 带 reused=true），
+  过期→诚实重采（宁可重采不给旧值）。
+  回归 2 件：TTL 内命中跳过粘贴（paste 被调用即炸）+ TTL 过期不复用（test_runtime.py）。
+- **普通 `run <id>` 路径不变**：不带 store，行为与之前一致（重新收集）。
+- 测试：**818 passed / 5 skipped**（本轮 +4）。

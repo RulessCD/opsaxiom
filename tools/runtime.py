@@ -141,7 +141,7 @@ class IO:
 
 class Session:
     def __init__(self, skill_path, params=None, mode="guided", io=None, sid="sess",
-                 remote_runner=None):
+                 remote_runner=None, facts=None, facts_target=None):
         self.skill = yaml.safe_load(pathlib.Path(skill_path).read_text(encoding="utf-8"))
         self.nodes = {n["id"]: n for n in self.skill["tree"]["nodes"]}
         self.entry = self.skill["tree"]["entry"]
@@ -149,6 +149,8 @@ class Session:
         self.io = io or IO()
         self.sid = sid
         self.remote_runner = remote_runner  # 远程 gate 执行器（remote 模式时传入）
+        self.facts = facts                  # 事实库（回流点②：可选，None=不查库）
+        self.facts_target = facts_target    # 事实键的 target（与 put_parsed 一致）
         self.ctx = dict(params or {})
         self.ctx["sid"] = sid
         self.path = []
@@ -244,10 +246,50 @@ class Session:
         return n.get("otherwise", "escalate")
 
     # ---- 节点处理 ----
+    def _facts_hit(self, cmd):
+        """回流点②：check 执行前先查事实库（渲染后命令 = 入库键，normalize 等价）。
+        走 FactStore 公共 API get_parsed（命中且未过期→parsed，否则 None——
+        诚实：宁可重采不给旧值）。库异常不阻塞排查，退常规采集。"""
+        if self.facts is None:
+            return None
+        try:
+            from facts import normalize_cmd
+            value = self.facts.get_parsed(normalize_cmd(cmd),
+                                           target=self.facts_target or "local")
+            return {"value": value, "source_cmd": normalize_cmd(cmd)} if value is not None else None
+        except Exception:
+            return None
+
+    def _lookup_cached_fact(self, cmd):
+        """返回命中 fact 或 None（供 _do_check 与测试共同使用）。"""
+        return self._facts_hit(cmd)
+
+    def _absorb_parsed(self, parsed):
+        """把一份解析产物（缓存复用）灌进 ctx——镜像 _parse_into_ctx 的并入
+        规则（标量进 output.* + 裸命名空间），但产物已有，跳过 parser 再解析。"""
+        if not isinstance(parsed, dict):
+            return
+        scalar_ns = {k: v for k, v in parsed.items() if k not in ("rows", "lines")}
+        self.ctx.update(parsed)
+        self.ctx["output"] = {**self.ctx.get("output", {}), **scalar_ns,
+                              **(parsed.get("output")
+                                 if isinstance(parsed.get("output"), dict) else {})}
+
     def _do_check(self, n):
         self.io._p(f"\n━━ [排查] {self.r(n.get('title',''))} ━━")
         self._cautions(n)
         cmd = self._cmd_for(n.get("run"))
+        # 回流点②：命中事实库（TTL 内）→ 复用解析产物，跳过执行/粘贴
+        cached = self._lookup_cached_fact(cmd)
+        if cached is not None:
+            self._absorb_parsed(cached["value"])
+            self.io._p(f"▶ 复用已采集证据（{cached['source_cmd']}）")
+            nxt = self._eval_branch(n)
+            self.io._p(f"→ 判读结果：转 {nxt}")
+            self._log(n["id"], "check", cmd=cmd, next=nxt,
+                      output=self._summ(json.dumps(cached["value"], ensure_ascii=False)),
+                      reused=True)
+            return nxt
         if self.remote_runner:
             # 远程模式：走 gate 自动执行（ro 目标白名单路由在 gate 侧；
             # 名单外命令会收到带降级提示的 GateError，这里转贴回）
