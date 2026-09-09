@@ -125,7 +125,8 @@ $ opsaxiom target enroll web-01 --host 10.0.1.11
    - 创建 opsaxiom-ro 用户 + 写入 sudoers 只读白名单（从 Skill 库命令集生成）
      —— ssh+linux 必建流程（非可选）
 ④ 验证：改用密钥以 opsaxiom-ro 登录 → 跑 3 条只读探针 → 🟢
-✔ 已写入 targets.yaml（auth: agent，白名单档）。今后名单内命令免密自动采集，
+✔ 已写入 targets.yaml（auth: file:~/.ssh/id_ed25519 —— 实际记录探测到/生成
+  的私钥路径，本机视角的引用；白名单档）。今后名单内命令免密自动采集，
   密码已丢弃。需要全量自动 → target grant web-01（root 档）。
 ```
 

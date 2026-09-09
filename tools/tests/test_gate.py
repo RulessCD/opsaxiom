@@ -192,3 +192,182 @@ def test_sudo_routed_predicate_static_semantics(tmp_path, monkeypatch):
     sweep.revoke_trust("web-01")
     assert gate.sudo_routed("web-01", "df -B1 /") is True      # trust 不影响谓词
 
+
+# ---------- 十七轮返工：B-1 复合型前缀 + err_kind 结构化（裁定 3）----------
+
+def _setup_wl_entries(tmp_path, monkeypatch, entries, cmd_probe):
+    """可控白名单 registry：直接给定 gen_sudoers 条目（比 _setup_wl 灵活，
+    复合型前缀测试需精确控制 (bin, prefix) 集合）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    sk = tmp_path / "hub" / "registry" / "skills" / "t.x" / "0.1.0" / "skill.yaml"
+    sk.parent.mkdir(parents=True, exist_ok=True)
+    sk.write_text(yaml.safe_dump({
+        "metadata": {"id": "t.x"}, "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "check", "run": {"linux": cmd_probe}}]}}),
+        encoding="utf-8")
+    return entries
+
+
+def test_wl_member_composite_prefix_scoped(tmp_path, monkeypatch):
+    """B-1/v3：复合型二进制（systemctl）成员判定须带【已登记只读子命令】——
+    未登记写子命令（restart）、flag 前缀（--failed，F-19）、非登记裸形态
+    一律 False（远端物理闸同源）。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    assert gate._wl_member("systemctl is-active nginx") is True
+    assert gate._wl_member("systemctl restart nginx") is False   # 写子命令未登记
+    assert gate._wl_member("systemctl") is False                 # 无前缀 fail-closed
+    # F-19 核心：flag 打头穿透写子命令——客户端必须与远端同拒（都不可能有
+    # --failed 前缀条目，物理上远端也不会放行）
+    assert gate._wl_member("systemctl --failed restart nginx") is False
+    assert gate._wl_member("df -B1 /") is False                  # 不在名单
+    # 非复合型裸名即过：再造 df 条目
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 /")
+    assert gate._wl_member("df -B1 /") is True
+
+
+def test_wl_member_prefix_mirror_matches_sudoers(tmp_path, monkeypatch):
+    """客户端成员判定与远端 sudoers 条目【对称】（F-18/F-21 异议修复）：
+    遍历代表形态集合，客户端 True ⟺ sudoers fnmatch 该命令 args 命中。
+    覆盖子命令前缀/flag 打头/裸名/写子命令/带参/无参各象限——对称性破坏
+    （客户端 True/远端 False = 死路由；客户端 False/远端 True = 白名单资产
+    无谓贴回）任何一边都应转红。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    # df 形态进样本：向 mini registry 再造一个 df skill（直接追加文件，
+    # 不覆盖前一个——_setup_wl_entries 重复调用会整体重建同名 skill 目录）
+    sk2 = tmp_path / "hub" / "registry" / "skills" / "t.y" / "0.1.0" / "skill.yaml"
+    sk2.parent.mkdir(parents=True, exist_ok=True)
+    sk2.write_text(yaml.safe_dump({
+        "metadata": {"id": "t.y"}, "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "check", "run": {"linux": "df -B1 /"}}]}}),
+        encoding="utf-8")
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "tools" / "authoring"))
+    import gen_sudoers as G
+    import fnmatch
+    entries = gate._allow_entries()
+    assert ("systemctl", "is-active") in entries
+    assert ("df", None) in entries                 # 裸名支路（F-25）样本就位
+    text = G.render_sudoers_file(sorted(entries), user="opsaxiom-ro",
+                                 bin_paths={"systemctl": "/usr/bin/systemctl",
+                                            "df": "/usr/bin/df"})
+    specs = []
+    for line in text.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        raw = line.split("NOPASSWD: ", 1)[1].split(", ")
+        specs = [s.replace("/usr/bin/", "", 1) for s in raw]
+        break
+
+    def remote_allows(shape):
+        """sudoers(5) 语义近似：spec 'bin ARGS' 对命令 bin ARGS 做 fnmatch——
+        尾 `*` 通配剩余整串；裸名条目（无参数部分）放行【任意参数】——
+        sudoers(5) 裸条目即任意 args（F-25：近似函数自身也是镜像，只写
+        手册可考的规则；缺这条支路会对 (bin,None) 条目假报"死路由"）。"""
+        first, _, args = shape.partition(" ")
+        for s in specs:
+            sname, _, sargs = s.partition(" ")
+            if sname != first:
+                continue
+            if sargs == "":
+                return True                     # 裸名条目 = 任意参数放行
+            if fnmatch.fnmatch(args, sargs):
+                return True
+        return False
+
+    for shape in ["systemctl is-active x", "systemctl is-active",
+                  "systemctl restart nginx", "systemctl",
+                  "systemctl --failed x", "df -B1 /", "df", "df -h /x"]:
+        remote = remote_allows(shape)
+        client = gate._wl_member(shape)
+        # 方向一：客户端 True 但远端拒 → 死路由（F-18 型功能回滚）
+        assert not (client and not remote), \
+            f"死路由（客户端放行/远端拒绝）: {shape!r} sudoers specs={specs}"
+        # 方向二：远端放行而客户端拒 = 无谓贴回（镜像失真）
+        assert not (remote and not client), \
+            f"镜像失真（客户端过严）: {shape!r} sudoers specs={specs}"
+
+
+def test_gate_audits_error_kind(tmp_path, monkeypatch):
+    """连接器异常审计带 err_kind；SSHError（exec 级）不误标 connect。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 /")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    (tmp_path / "targets.yaml").write_text(yaml.safe_dump({"targets": {
+        "web-01": {"connector": "ssh", "host": "10.0.0.9", "user": "opsaxiom-ro",
+                   "auth": "agent", "sudo_whitelist": True},
+    }}, allow_unicode=True), encoding="utf-8")
+
+    def boom(target, cred, cmd):
+        from connectors.ssh_conn import SSHError
+        raise SSHError("SSH 执行失败：x")
+    with pytest.raises(Exception):
+        gate.run_remote("web-01", "df -B1 /", connector_fn=boom, now="T")
+    rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
+    assert rec["decision"] == "error" and rec["err_kind"] == "exec"
+
+
+# ---------- Fable 裁定 3 对抗：错误文本不可作为 fail-fast 信号 ----------
+
+def test_rc_level_failure_with_connect_word_is_exec_not_connect(tmp_path, monkeypatch):
+    """对抗（裁定 3 核心）：rc 级失败的消息拼了远端 stderr——中文报错常含
+    "连接"二字，若靠文本匹配会误判成连接级。err_kind 按异常类判定：
+    SSHError("...连接...") 必须是 exec，而不是 connect。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 /")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    (tmp_path / "targets.yaml").write_text(yaml.safe_dump({"targets": {
+        "web-01": {"connector": "ssh", "host": "10.0.0.9", "user": "opsaxiom-ro",
+                   "auth": "agent", "sudo_whitelist": True},
+    }}, allow_unicode=True), encoding="utf-8")
+
+    def boom(target, cred, cmd):
+        from connectors.ssh_conn import SSHError
+        raise SSHError("远端返回码 2：无法连接到数据库服务器")   # rc 级，但含"连接"
+    with pytest.raises(Exception):
+        gate.run_remote("web-01", "df -B1 /", connector_fn=boom, now="T")
+    rec = json.loads((tmp_path / "audit" / "remote.jsonl").read_text().splitlines()[-1])
+    assert rec["err_kind"] == "exec"          # 文本含"连接"≠连接级
+    assert gate.err_kind(Exception("连接超时")) == "exec"   # 裸 Exception 同样从宽
+
+
+# ---------- F-28：执行门只读名单同源派生（运行时镜像分叉，真机暴露）----------
+
+def test_runtime_gate_allows_registry_whitelisted_probes(tmp_path, monkeypatch):
+    """F-28 回归：白名单路由放行（_wl_member 吃 registry extract 产物）后，
+    执行门二次校验不得用另一份手抄动词表误拒（真机白名单档批量取证实曝：
+    iotop/numastat/getent/tail/top 等 15 个 registry 收录命令被执行门
+    "写/非只读命令"误拒）。派生名单 = registry ∪ sim._ALLOW_LEAD，
+    特判（kubectl 写动词 / mount 无参查询、带参挂载）与写词 DENY 保持既有。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 / | grep -v tmpfs")
+    # iotop 探针进 mini registry（白名单路由成员资格的来源）
+    sk2 = tmp_path / "hub" / "registry" / "skills" / "t.z" / "0.1.0" / "skill.yaml"
+    sk2.parent.mkdir(parents=True, exist_ok=True)
+    sk2.write_text(yaml.safe_dump({
+        "metadata": {"id": "t.z"}, "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "check", "run": {"linux":
+                "iotop -b -n 2 -o -k 2>/dev/null | head -15"}}]}}),
+        encoding="utf-8")
+    # 白名单路由放行（这条探针走白名单档）
+    assert gate._wl_member("iotop -b -n 2 -o -k 2>/dev/null | head -15") is True
+    # 执行门必须同时放行（修复点：此前这里 False → 误拒）
+    assert gate._readonly_ok("ssh", "iotop -b -n 2 -o -k 2>/dev/null | head -15") is True
+    # 既有拒绝语义不回退
+    assert gate._readonly_ok("ssh", "rm -rf /data") is False
+    assert gate._readonly_ok("ssh", "cat /etc/shadow > /tmp/x") is False
+    assert gate._readonly_ok("ssh", "mount /dev/vdb /mnt") is False      # 带参挂载
+    assert gate._readonly_ok("ssh", "mount | grep -c ro") is True        # 无参查询
+    assert gate._readonly_ok("ssh", "kubectl get pods") is True
+    assert gate._readonly_ok("ssh", "kubectl delete pod x") is False
+
+
+def test_runtime_ro_leads_consumes_registry_not_mirror(tmp_path, monkeypatch):
+    """牙口（F-20 纪律）：_runtime_ro_leads 必须消费 registry——清空 registry
+    名单联动断言。手写镜像测试（往名单里写死 iotop）拦不住再分叉；此处
+    造一个空 registry + sim 动词表注入验证并集语义。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    # registry 里只有 systemctl is-active；派生名单必含之，且含 sim 侧既有 echo
+    leads = gate._runtime_ro_leads()
+    assert ("systemctl", "is-active") in gate._allow_entries()
+    assert "systemctl" in leads and "echo" in leads
+    # 静态防御：sim/run_sim._ALLOW_LEAD 仍是 sim 侧单一来源，gate 不再单独维护
+    import run_sim
+    assert gate._runtime_ro_leads() >= {b for b, _p in gate._allow_entries()}
+

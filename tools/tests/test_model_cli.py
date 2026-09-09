@@ -137,7 +137,8 @@ def test_check_local_ready_all_pass(tmp_path):
     probs = model_cli.check_local_ready(
         disk_usage=_du(50), meminfo_path=str(mem),
         which=lambda x: "/usr/bin/" + x,          # ollama/sudo 都有
-        geteuid=lambda: 1000, net_probe=lambda: True)
+        geteuid=lambda: 1000, net_probe=lambda: True,
+        system="Linux")                           # 平台注入（macOS 开发机也能全绿）
     assert probs == []
 
 
@@ -188,5 +189,6 @@ def test_check_local_ready_ollama_installed_skips_net_and_root(tmp_path):
     probs = model_cli.check_local_ready(
         disk_usage=_du(50), meminfo_path=str(mem),
         which=lambda x: "/usr/bin/ollama" if x == "ollama" else None,
-        geteuid=lambda: 1000, net_probe=lambda: False)
+        geteuid=lambda: 1000, net_probe=lambda: False,
+        system="Linux")
     assert probs == []

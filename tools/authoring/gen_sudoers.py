@@ -28,6 +28,33 @@ import yaml
 
 # 段切分（引号感知版）：复合命令连接符（管道 + 逻辑符 + 分号）
 _SEG_RE = re.compile(r"&&|\|\||;|\|")
+# 复合型二进制（十七轮返工 v3 语义，F-19）：命令词与 flag 正交（systemd CLI 的
+# "OPTIONS COMMAND" 结构），flag 打头的 sudoers 条目关不死后面的写子命令——
+# `systemctl --failed *` 同时匹配 `systemctl --failed restart nginx`（真机 registry
+# 已登记 --failed 前缀，实测双侧放行写命令）。因此复合型二进制【只认下方
+# _RO_COMPOSITE_SUBCMDS 登记的只读子命令】作前缀；flag/选项前缀一律 fail-closed
+# （不产出条目，该探针白名单档转贴回），复合型也永不发裸名。
+_COMPOSITE_LEAD = {"systemctl", "journalctl", "timedatectl", "networkctl",
+                   "nvidia-smi",
+                   "ip", "nft", "iptables", "firewall-cmd"}
+# 复合型二进制的【结构性只读子命令】白名单：这些子命令之后只跟参数，不可能
+# 携带写子命令词；不在名单里的子命令/flag 前缀一律不登记（fail-closed 转贴回——
+# journalctl 的 -u/--disk-usage 是 flag 不是子命令，fnmatch 尾通配关不住
+# --vacuum-size/--rotate 这类销毁证据的写 flag，现网 journalctl 探针因此全部
+# 降级贴回；这是"写侧焊死"的代价，发起人已确认）。
+_RO_COMPOSITE_SUBCMDS = {
+    "systemctl": {"is-active", "status", "show"},
+    "timedatectl": {"status", "show"},
+    "networkctl": {"status", "list"},
+    # nvidia-smi：写动词全走 flag/子命令后参（-r 换卡复位/-pl 功耗/-ac 锁频/
+    # mig -cgi 建 MIG），裸名关不住——按复合型从严，只登纯观察子命令；
+    # nvlink/mig 不放（nvlink -r 重置计数器、mig 可写），flag 前缀（-q/-L/
+    # --query-*）结构性 fail-closed，相关 GPU 探针降级贴回（写侧焊死代价）。
+    "nvidia-smi": {"dmon", "topo"},
+    # journalctl 的常用形态全是 flag（-u/--disk-usage）→ 结构性无前缀可放行；
+    # ip/nft/iptables/firewall-cmd 的 OBJECT 之后可接 flush/add 等写动词，单
+    # token 前缀（ip neigh）关不住 `ip neigh flush` → 全部 fail-closed
+}
 # shell 控制词与重定向段不算白名单内容
 _CTRL = {"for", "if", "then", "else", "fi", "do", "done", "while", "case", "esac",
          "in", "echo", "true", "false", "exit", "return", "export", "set", "cd",
@@ -38,13 +65,38 @@ _CTRL = {"for", "if", "then", "else", "fi", "do", "done", "while", "case", "esac
 # env 直接改环境起进程；socat/nc 是网络管道双刃。
 _INTERPRETERS = {"bash", "sh", "zsh", "ksh", "dash", "awk", "gawk", "mawk",
                  "perl", "python", "python3", "env", "exec", "find", "timeout",
-                 "xargs", "socat", "nc", "ncat", "expect", "lua", "ruby", "php"}
+                 "xargs", "socat", "nc", "ncat", "expect", "lua", "ruby", "php",
+                 # "策略 + 任意命令"执行器（F-23，GTFOBins 同族）：语法即
+                 # "策略参数 + 任意命令"，sudo 下方第一个位置参数之后可起
+                 # root shell——语句上与解释器无异，硬拒，探针转贴回。
+                 "numactl", "taskset", "chrt", "ionice", "nice", "setsid",
+                 "stdbuf", "nohup", "strace", "ltrace", "watch",
+                 # F-27（Fable 补齐，同族防御纵深；现网 registry 未登记——
+                 # 登记前先入拒收名单，避免将来 skill 混入时物理闸开口）
+                 "flock", "nsenter", "unshare", "setpriv", "capsh",
+                 "machinectl"}
 # 排除名单：客户端 CLI（能执行写 SQL/写命令/服务管理），这类进白名单会让
 # 只读账号获得远超"取证"的能力——它们的只读使用场景走各 connector（mysql 键）
 # 与专用账号，不走 sudoers。
 _DENY_BINS = {"mysql", "mysqldump", "psql", "mongosh", "mongo", "redis-cli",
               "rabbitmqctl", "nginx", "sshd", "curl", "fail2ban-client",
-              "kubectl", "kubectl.x", "auditctl"}
+              "kubectl", "kubectl.x", "auditctl",
+              # 裸名放行 = ro 账号直接可写/可破坏（F-23）："语义固定"不成立的
+              # 伪装者——首参后可下达写动作，fnmatch 裸名条目关不住：
+              #   sysctl -w（写内核参数）/ nvidia-smi -r -pl -ac（GPU reset、
+              #   改功耗锁频）/ smartctl --smart=on -t online（改盘行为、起自检）
+              #   chronyc settime（改时钟）/ coredumpctl delete（删转储）/
+              #   tcpdump -w / ethtool -w。这些的只读使用场景在客户端 _is_readonly
+              #   判定照常，白名单档收不到 sudo 即转贴回。
+              "sysctl", "smartctl", "chronyc", "coredumpctl", "tcpdump",
+              "modprobe", "insmod", "rmmod", "blockdev", "hdparm",
+              "dmidecode",
+              # F-26（发起人裁定收窄，2026-09-09）：裸名条目 = 任意参数含写动作——
+              #   mount /dev/x /mnt（挂载任意盘）/ conntrack -D（删状态表）/
+              #   kafka-topics.sh --create --delete（写 Kafka 元数据）。
+              # 自动路径客户端 _is_readonly 本就拦住，物理面（持 ro 凭据者直接
+              # sudo -n）不再放行；相关 skill 探针白名单档转贴回。
+              "mount", "conntrack", "kafka-topics.sh"}
 
 
 def split_segments(cmd):
@@ -77,18 +129,15 @@ def split_segments(cmd):
     return segs
 
 
-def extract_entries(cmd):
-    """一条命令字符串 → set[(bin, arg_prefix)]。
-    只收**命令首段**的二进制：sudo 的提权语义只罩住"我们发出的一整条命令"里
-    以 sudo 运行的那一段——管道/复合的其他段不会以 sudo 身份跑，白名单里
-    收它们只会扩权（v2 教训）。首段 = 引号感知切分后的第一段；
-    若它是 `sudo`/`-n`/`-u` 变体则穿透；控制词/flag/解释器/deny 名单不算。
-    arg_prefix = 二进制后的第一个非 flag token（如 systemctl 的子命令）；
-    其余参数为 `*`（只读命令参数不可枚举）。二进制名形态校验。"""
-    out = set()
+def lead_tokens(cmd):
+    """命令字符串 → (首段可执行体裸名, 全部 token, 裸名下标) 或 None。
+    引号感知切段取首段、剥子 shell 括号/数字重定向、sudo 穿透、基名归一。
+    【只做形态校验】——解释器/提权跳板（_INTERPRETERS）与写面客户端
+    （_DENY_BINS）的硬拒留给调用方按各自边界决定：sudoers 提取（extract_entries）
+    与运行时只读动词判定（gate 派生名单，T-6）的边界不同，共用于此。"""
     segs = split_segments(cmd)
     if not segs:
-        return out
+        return None
     seg = segs[0].strip()
     # 跳过子 shell 段首的 ( 与 {（v1 不进子 shell 内部）
     toks = [t for t in seg.split() if t not in ("(", ")")]
@@ -96,35 +145,65 @@ def extract_entries(cmd):
     while toks and re.match(r"^\d*>(/|\S)", toks[0]):
         toks = toks[1:]
     if not toks:
-        return out
+        return None
     i = 0
     while i < len(toks) and toks[i] in ("sudo", "-n", "-u"):
         i += 1
     if i >= len(toks):
-        return out
+        return None
     name = toks[i]
     name = name.rsplit("/", 1)[-1]         # 相对路径取基名
     if not name or name in _CTRL or name.startswith("-"):
+        return None
+    if not re.match(r"^[A-Za-z0-9_.@+\-]+$", name):
+        return None
+    return name, toks, i
+
+
+def extract_entries(cmd):
+    """一条命令字符串 → set[(bin, arg_prefix)]。
+    只收**命令首段**的二进制：sudo 的提权语义只罩住"我们发出的一整条命令"里
+    以 sudo 运行的那一段——管道/复合的其他段不会以 sudo 身份跑，白名单里
+    收它们只会扩权（v2 教训）。首段解析（sudo 穿透/引号/重定向/基名）见
+    lead_tokens；解释器类硬拒（GTFOBins）；deny 名单结构性排除。
+    arg_prefix = 二进制后的第一个非 flag token（如 systemctl 的子命令）；
+    其余参数为 `*`（只读命令参数不可枚举）。二进制名形态校验。"""
+    out = set()
+    led = lead_tokens(cmd)
+    if not led:
         return out
+    name, toks, i = led
     if name in _INTERPRETERS or name in _DENY_BINS:
         return out
-    if not re.match(r"^[A-Za-z0-9_.@+\-]+$", name):
-        return out
-    # 首个非 flag token 作为参数前缀（systemctl is-active → "is-active"）；
-    # 二进制直跟 flag（如 df -h / ps aux）→ 无前缀（全参放行）
-    j = i + 1
-    while j < len(toks):
-        t = toks[j]
-        if t.startswith("-") or re.match(r"^\d*>", t) or t in _CTRL:
-            j += 1
-            continue
-        if re.match(r"^[A-Za-z][A-Za-z0-9_-]*$", t):
-            # 模板占位符段（{{...}} 会被渲染）不算固定参数
-            if "{{" not in seg:
-                out.add((name, t))
+    # 前缀 = 二进制后的第一个"有区分度"的 token（仅对复合型二进制有意义）：
+    #   - 子命令词（systemctl is-active → "is-active"）
+    #   - type-1 flag（systemctl --failed / journalctl -u）——v3 起禁用：flag 与
+    #     命令词正交，sudoers 尾通配关不住其后的写子命令/写 flag（F-19），
+    #     故 flag 一律不作为放行前缀（fail-closed，探针转贴回）
+    # 复合型二进制【不登记裸名】；前缀必须在 _RO_COMPOSITE_SUBCMDS 名单内。
+    # 非复合型维持 v2 语义：裸名一条（args 任意，语义固定无节制必要）。
+    prefix = None
+    if name in _COMPOSITE_LEAD:
+        j = i + 1
+        while j < len(toks):
+            t = toks[j]
+            if t in _CTRL or re.match(r"^\d*>/", t):    # 控制词/段内重定向跳过
+                j += 1
+                continue
+            if re.match(r"^\d*>", t):                    # 段尾重定向（2>/dev/null 自身）
+                break
+            if t.startswith("-"):
+                break                        # flag 前缀 fail-closed（F-19）：不登记
+            if re.match(r"^[A-Za-z][A-Za-z0-9_@.+-]*[A-Za-z0-9_-]$", t) or \
+                    re.match(r"^[A-Za-z]$", t):
+                if "{{" not in t and t in _RO_COMPOSITE_SUBCMDS.get(name, set()):
+                    prefix = t               # 只读子命令：唯一可放行的前缀形态
+                break
             break
-        break
-    out.add((name, None))                  # 无参形态也登记一份（args 任意）
+    if name not in _COMPOSITE_LEAD:
+        out.add((name, None))              # 单用途二进制：裸名形态（args 任意）
+    if prefix is not None:
+        out.add((name, prefix))
     return out
 
 
@@ -195,17 +274,20 @@ def _group_by_bin(entries):
 
 def _entry_specs(entries):
     """{(bin, prefix|None)} → 排序后的 sudoers 片段列表。
-    同 bin 若存在 None（无固定子命令 → 参数任意），裸 bin 覆盖一切前缀条目；
-    否则每个前缀一条 `bin prefix *`。specs 为裸名形态——写远端前由 enroll
-    经 `command -v` 解析为绝对路径后重渲染（sudoers 要求绝对路径）。"""
+    非 None 前缀 → `bin prefix *` + 裸 `bin prefix` 两条（sudoers 参数匹配是
+    fnmatch 整串，`prefix *` 只匹配带参形态，无参调用需裸前缀条覆盖——
+    B-1 修复时实测确认）。None 前缀（裸名，args 任意）只出现在非复合型
+    二进制上（复合型在 extract_entries 已禁止裸名登记，B-1）。
+    specs 为裸名形态——写远端前由 enroll 经 `command -v` 解析为绝对路径后
+    重渲染（sudoers 要求绝对路径）。"""
     specs = []
     by_bin = _group_by_bin(entries)
     for name in sorted(by_bin):
-        prefixes = by_bin[name]
-        if None in prefixes:
-            specs.append(name)
-        else:
-            specs.extend(f"{name} {p} *" for p in sorted(prefixes))
+        for p in sorted(by_bin[name], key=lambda x: (x is not None, x or "")):
+            if p is None:
+                specs.append(name)
+            else:
+                specs.extend([f"{name} {p} *", f"{name} {p}"])
     return specs
 
 

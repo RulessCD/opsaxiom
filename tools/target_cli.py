@@ -376,7 +376,12 @@ def _enroll_ssh(name, host, port, user):
             else:
                 import gen_sudoers as G
                 reg_root = G.default_skills_root()
-                bins = sorted({n for n, _ in G.scan_skills_dir(reg_root)}) if reg_root else []
+                # 完整条目 (bin, prefix)：复合型二进制（systemctl/ip…）带子命令
+                # 前缀——远端 sudoers 只放行见过的子命令形态（B-1：裸名 = 任意
+                # 参数 = 写子命令提权，物理闸穿透）。
+                wl_entries = sorted(G.scan_skills_dir(reg_root),
+                                    key=lambda e: (e[0], e[1] or "")) if reg_root else []
+                bins = sorted({b for b, _p in wl_entries})
                 if not bins:
                     print("  ⚠ registry 缓存无 skill（先 hub sync）——白名单生成不出。")
                     sudoer_bins = []
@@ -390,7 +395,7 @@ def _enroll_ssh(name, host, port, user):
                         confirmed = input("  确认写入以上能力范围？[Y/n]: ").strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         confirmed = "n"
-                    sudoer_bins = [] if confirmed in ("n", "no", "否") else bins
+                    sudoer_bins = [] if confirmed in ("n", "no", "否") else wl_entries
                 ok, rerr = E.create_ro_user(cli, pub, sudoers_text=None,
                                             sudoer_bins=sudoer_bins or None)
                 if ok and sudoer_bins:

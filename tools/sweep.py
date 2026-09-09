@@ -161,9 +161,10 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
             try:
                 out = local_runner(p["cmd"])
             except Exception as e:                       # noqa: BLE001
+                from gate import err_kind
                 msg = str(e).strip() or type(e).__name__   # 空 str 异常兜底（真机教训）
                 executed.append({"node": p["node"], "cmd": p["cmd"],
-                                 "status": "error", "err": msg})
+                                 "status": "error", "err": msg, "err_kind": err_kind(e)})
                 continue
             parsed = _store_result(store, p, out, now)
             executed.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",
@@ -200,10 +201,12 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
         try:
             out = remote_runner(tname, p["cmd"], params)
         except Exception as e:                       # noqa: BLE001
-            # str(e) 可能为空（socket.timeout 等真机教训）——诚实标明异常类名
+            # str(e) 可能为空（socket.timeout 等真机教训）——诚实标明异常类名；
+            # err_kind 结构化类别供 repl fail-fast 判定（弃错误文本匹配，裁定 3）
+            from gate import err_kind
             msg = str(e).strip() or type(e).__name__
             executed.append({"node": p["node"], "cmd": p["cmd"], "status": "error",
-                             "target": tname, "err": msg})
+                             "target": tname, "err": msg, "err_kind": err_kind(e)})
             continue
         parsed = _store_result(store, p, out, now)
         executed.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",

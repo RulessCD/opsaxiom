@@ -50,16 +50,142 @@ def test_write_action_bins_excluded():
 
 
 def test_systemctl_prefix_and_none_override():
-    """check 里的 systemctl is-active 带前缀；同 bin 有 (bin, None) 时裸名覆盖前缀。"""
+    """B-1 修复后语义：复合型二进制（systemctl）永不产生裸名条目——
+    extract 只给 (bin, 子命令)；`sudo -n systemctl restart` 之类未登记形态
+    物理不可达（远端 sudoers 无裸 systemctl 行）。"""
     e = G.extract_entries("systemctl is-active nginx")
     assert ("systemctl", "is-active") in e
-    merged = G._group_by_bin({("systemctl", "is-active"), ("systemctl", None)})
-    assert G._entry_specs(dict()) is not None   # 不崩
-    specs = G._entry_specs({("systemctl", "is-active"), ("systemctl", None)})
-    assert "systemctl is-active *" not in specs and "systemctl" in specs
+    assert ("systemctl", None) not in e         # 复合型禁止裸名（B-1）
+    specs = G._entry_specs({("systemctl", "is-active")})
+    assert "systemctl is-active *" in specs and "systemctl is-active" in specs
+    assert "systemctl" not in specs             # 无裸名覆盖条
+
+
+def test_composite_bare_probe_fail_closed():
+    """复合型二进制无子命令/flag 前缀（如裸 journalctl）→ 零条目（fail-closed）：
+    该探针不进白名单，执行端转贴回。纯 {{...}} 首参同理不固定。"""
+    assert G.extract_entries("journalctl") == set()
+    assert G.extract_entries("ip {{ifname}}") == set()
 
 
 # ---------- v2：引号感知切段 / 段首-only / 解释器硬拒 / 路径重渲染 ----------
+
+def test_b1_write_subcommand_physically_absent(tmp_path, monkeypatch):
+    """B-1/v3 端到端回归门槛：把当前 registry 扫一遍渲染 sudoers（带 bin_paths
+    ——enroll 落盘的真实形态；F-20 教训：断言必须锚定落盘形态本身），
+    断言任何复合二进制的"未登记写子命令/写 flag"不出现为放行形态，裸名
+    复合型行物理不在场。牙口由 test_b1_gate_has_teeth 以缺陷重建锁定。"""
+    root = G.default_skills_root()
+    if not root:
+        pytest.skip("无 registry（本机未 hub sync）")
+    usage = G.scan_skills_dir(root)
+    assert usage, "registry 扫描出零条目——更新机制坏了？"
+    bin_paths = {b: f"/usr/bin/{b}" for b, _p in usage}
+    text = G.render_sudoers_file(usage, user="opsaxiom-ro",
+                                 bin_paths=bin_paths)
+    text_preview = G.render_sudoers_file(usage, user="opsaxiom-ro")
+    # 允许出现在 spec 第二段的子命令：按 gen_sudoers 只读子命令名单派生
+    # （T-6：不手抄，F-24。并集兜住全域，实际条目受 extract 约束）
+    ALLOWED_SUBCMDS = set()
+    for _subs in getattr(G, "_RO_COMPOSITE_SUBCMDS", {}).values():
+        ALLOWED_SUBCMDS |= set(_subs)
+    # 裸名行（len==1）的基名若属复合型/执行器即违规——放行的只允许
+    # "子命令前缀双形态"（bin sub / bin sub *）
+    violations = []
+    for line in text.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        for spec in line.split("NOPASSWD: ", 1)[1].split(", "):
+            parts = spec.split()
+            if not parts:
+                continue
+            base = parts[0].rsplit("/", 1)[-1]
+            if base in _COMPOSITE_BASES and len(parts) == 1:
+                violations.append(f"复合型裸名行（B-1 本体）: {spec!r}")
+            if len(parts) >= 2 and base in _COMPOSITE_BASES:
+                if parts[1].startswith("-"):
+                    # flag 打头条目：尾通配关不住后续写子命令/写 flag（F-19）
+                    violations.append(f"flag 前缀条目在场: {spec!r}")
+                elif parts[1] not in ALLOWED_SUBCMDS:
+                    violations.append(f"未登记写子命令在场: {spec!r}")
+    assert not violations, "B-1/v3 回归——sudoers 放行形态违规:\n  " + \
+        "\n  ".join(violations)
+    # 预览形态同样不得出现裸名复合行（写入远端前的最后防线）
+    for line in text_preview.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        for spec in line.split("NOPASSWD: ", 1)[1].split(", "):
+            parts = spec.split()
+            assert not (parts and parts[0] in _COMPOSITE_BASES and len(parts) == 1), \
+                f"预览版裸名复合型行在场（写入远端前会带路径遗漏检查）: {spec!r}"
+
+
+# 复合型/受限二进制基名：从 gen_sudoers 派生（T-6 纪律：测试自身不手抄名单——
+# 手抄必漂移，F-24；numactl 是 _INTERPRETERS 侧的执行器，单独补上）
+_COMPOSITE_BASES = set(G._COMPOSITE_LEAD) | {"numactl"}
+"""复合型/受限二进制基名：裸名行与未登记 flag/写子命令前缀一律不允许出现。"""
+
+
+def test_b1_gate_has_teeth():
+    """F-20 教训的牙口锁定：把 B-1 缺陷条目（裸 systemctl + flag 前缀条）
+    人为掺进渲染输入，上面的断言体必须炸——无牙测试比没有测试更糟。"""
+    defect = {("df", None), ("systemctl", None),      # B-1 本体：复合型裸名
+              ("systemctl", "--failed"),              # F-19：flag 前缀通配
+              ("numactl", None)}                      # F-23 root shell 执行器
+    bp = {"df": "/usr/bin/df", "systemctl": "/usr/bin/systemctl",
+          "numactl": "/usr/bin/numactl"}
+    text = G.render_sudoers_file(defect, user="opsaxiom-ro", bin_paths=bp)
+    # 逐字复放 test_b1_write_subcommand_physically_absent 的断言核心
+    violations = []
+    for line in text.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        for spec in line.split("NOPASSWD: ", 1)[1].split(", "):
+            parts = spec.split()
+            if not parts:
+                continue
+            base = parts[0].rsplit("/", 1)[-1]
+            if base in _COMPOSITE_BASES and len(parts) == 1:
+                violations.append(spec)
+            if len(parts) >= 2 and parts[1].startswith("-") and \
+                    base in _COMPOSITE_BASES:
+                violations.append(spec)
+    assert violations, "牙口失效：掺入 B-1 缺陷条目未被断言体拦截（F-20 复发）"
+
+
+def test_f26_write_face_bins_never_whitelisted():
+    """F-26 回归（发起人裁定收窄）：mount/conntrack/kafka-topics.sh 绝不
+    入白名单——裸名条目=任意参数含写动作（挂任意盘/删状态表/写 Kafka）。
+    直接断言 extract 对它们零产出；真 registry 若在场也断言渲染无此行。"""
+    assert G.extract_entries("mount /dev/vdb /mnt") == set()
+    assert G.extract_entries("conntrack -L") == set()
+    assert G.extract_entries("kafka-topics.sh --list --bootstrap-server x") == set()
+    assert "mount" in G._DENY_BINS and "conntrack" in G._DENY_BINS \
+        and "kafka-topics.sh" in G._DENY_BINS
+    root = G.default_skills_root()
+    if root:
+        usage = G.scan_skills_dir(root)
+        text = G.render_sudoers_file(set(usage), user="opsaxiom-ro",
+                                     bin_paths={b: f"/usr/bin/{b}"
+                                                for b, _p in usage})
+        for b in ("mount", "conntrack", "kafka-topics.sh"):
+            assert f"/usr/bin/{b}" not in text or b not in text, \
+                f"F-26 回归：{b} 回归白名单"
+
+
+def test_flag_prefix_form_fail_closed():
+    """v3（F-19）语义反转：flag 前缀不再是放行形态——flag 与命令词正交
+    （systemd CLI），`--failed *` 这类条目挡不住其后的写子命令/写 flag。
+    flag 探针（systemctl --failed / journalctl -u / --disk-usage）零条目：
+    需日志的服务取证转贴回或 target grant 升 root 档。"""
+    e = G.extract_entries("systemctl --failed --type=mount 2>/dev/null | grep -c x")
+    assert e == set()                              # flag 前缀 fail-closed（F-19）
+    e2 = G.extract_entries("journalctl -u cron --since '-1h'")
+    assert e2 == set()                             # 同上：-u 是 flag 不可前缀
+    e3 = G.extract_entries("journalctl --disk-usage")
+    assert e3 == set()
+    e4 = G.extract_entries("nvidia-smi --query-gpu=count --format=csv,noheader")
+    assert e4 == set()                             # flag 形态同禁（写 flag 同源）
 
 def test_v2_quoted_pipe_not_split():
     """引号内的 | 是正则交替不是管道——引号内容既不泄漏成"命令"、
@@ -97,10 +223,14 @@ def test_v2_render_flags_unresolved_paths():
 
 
 def test_render_sudoers_none_overrides_prefixes():
-    entries = {("systemctl", None), ("systemctl", "is-active")}
+    """B-1 后语义：裸名条目只可能来自非复合型二进制；复合型只有带子命令/
+    flag 的受限条目（`*` 尾通配 + 裸前缀两形态）。"""
+    entries = {("df", None), ("systemctl", "is-active")}
     text = G.render_sudoers_file(entries, user="opsaxiom-ro")
-    assert "systemctl is-active *" not in text
-    assert "opsaxiom-ro ALL=(root) NOPASSWD: systemctl" in text
+    assert "systemctl is-active *" in text
+    assert "systemctl is-active" in text
+    assert "NOPASSWD: df" in text                       # 非复合型保持裸名全参
+    assert "systemctl restart" not in text              # 写子命令物理不在场
 
 
 

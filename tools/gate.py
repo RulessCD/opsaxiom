@@ -92,9 +92,21 @@ def _http_readonly(method):
 
 
 def _readonly_ok(connector, cmd, target=None):
-    """按 connector 类型判只读。ssh/kubectl 复用 _is_readonly（同一套白名单）。"""
+    """按 connector 类型判只读。ssh/kubectl 走派生名单（T-6 同源）：
+    registry 白名单 ∪ sim/run_sim._ALLOW_LEAD（_runtime_ro_leads），再叠加
+    sim 的 _DENY 写词/重定向拒绝与 kubectl 写动词判定。原先直接复用
+    _is_readonly（手写 _ALLOW_LEAD），与 registry 白名单差 15 个命令，
+    白名单档放行后执行门误拒（真机暴露）。"""
     if connector in ("ssh", "kubectl"):
-        return _is_readonly(cmd)
+        try:
+            toks = cmd.strip().split()
+        except Exception:
+            return False
+        lead = toks[0].rsplit("/", 1)[-1] if toks else ""
+        if lead in ("kubectl", "mount"):
+            return _is_readonly(cmd)          # 语义特判仍在 sim（kubectl 写动词 /
+        from run_sim import _DENY             # mount 无参=查询、带参=挂载）
+        return lead in _runtime_ro_leads() and not _DENY.search(cmd)
     if connector == "network":
         platform = (target or {}).get("platform", "cisco_ios")
         return _network_readonly(platform, cmd)
@@ -117,28 +129,98 @@ def _stamp(now=None):
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def _allow_bins():
-    """registry 白名单成员（裸名集合）。与写入远端 /etc/sudoers.d/opsaxiom-ro
-    的清单同源同函数（gen_sudoers）。算不出 → 空集（fail-closed：不提权）。"""
+def _allow_entries():
+    """registry 白名单成员（(bin, prefix|None) 全集）。与写入远端
+    /etc/sudoers.d/opsaxiom-ro 的清单**消费同一 scan_skills_dir/extract_entries
+    产物**（gen_sudoers）——不是手写镜像：镜像必分叉（-u skip 事故、
+    startswith≠fnmatch，T-6 注记），"互证"只测登记形态不测对称性；
+    对称性由 test_wl_member_prefix_mirror_matches_sudoers 双向锁定。
+    算不出 → 空集（fail-closed：不提权）。"""
     try:
         sys.path.insert(0, str(HERE / "authoring"))
         import gen_sudoers as G
         reg_root = G.default_skills_root()
         if not reg_root:
             return set()
-        return {n for n, _ in G.scan_skills_dir(reg_root)}
+        return set(G.scan_skills_dir(reg_root))
     except Exception:
         return set()
 
 
+def _allow_bins():
+    """白名单裸名集合（展示用）。成员判定走 _wl_member（含复合型前缀检查）。"""
+    return {b for b, _p in _allow_entries()}
+
+
 def _wl_member(cmd):
-    """命令首段二进制是否在 registry 白名单内（与写远端 sudoers 同源，gen_sudoers）。"""
+    """命令是否在 registry 白名单内（与写远端 sudoers 同源，gen_sudoers）。
+    首段二进制在名单内还不够：
+      + 复合型二进制（_COMPOSITE_LEAD）永不裸名放行（B-1）；
+      + 复合型只认 _RO_COMPOSITE_SUBCMDS 登记的只读子命令作前缀（v3，F-19）：
+        flag 前缀（--failed/-u/--query-*…）与命令词正交，sudoers 尾通配关不住
+        其后的写子命令/写 flag（`systemctl --failed restart nginx` 实测穿透），
+        故 flag 一律不放行——该探针白名单档转贴回；
+      + 非复合型（语义固定单用途）裸名即过，但 deny/解释器名单不在登记里
+        （gen_sudoers 已滤）。
+    客户端与远端 sudoers 由 gen_sudoers 同一 extract_entries 产出，互证测试
+    test_wl_member_prefix_mirror_matches_sudoers 锁定同源性。"""
     import shlex
     try:
-        first = shlex.split(cmd.strip())[0] if cmd.strip() else ""
+        toks = shlex.split(cmd.strip())
     except ValueError:
         return False
-    return bool(first) and first.rsplit("/", 1)[-1] in _allow_bins()
+    if not toks:
+        return False
+    first = toks[0].rsplit("/", 1)[-1]
+    entries = _allow_entries()
+    if (first, None) in entries:
+        # 非复合型裸名条目：远端 sudoers 为 `bin *` 全参放行，同形态直通
+        return first not in _composite_union()
+    if first in _composite_union():
+        # 复合型：须为「子命令」前缀形态且该前缀已登记（只读子命令白名单）
+        sub = toks[1] if len(toks) > 1 else None
+        if sub is None or sub.startswith("-") or sub.startswith("{{"):
+            return False                      # 裸/flag/模板段：远端无此条目
+        return (first, sub) in entries        # 精确匹配（无 startswith 宽松）
+    return False
+
+
+def _composite_union():
+    """复合型二进制全集（gen_sudoers._COMPOSITE_LEAD 同源；取不到则空集从严）。"""
+    try:
+        sys.path.insert(0, str(HERE / "authoring"))
+        import gen_sudoers as G
+        return set(G._COMPOSITE_LEAD)
+    except Exception:
+        return set()                          # 分不清时退"无复合型"——裸名条目
+                                              # 本就只可能来自非复合型，安全
+
+
+def _runtime_ro_leads():
+    """运行时只读动词全集（T-6 同源派生，非手写镜像）。
+    历史：执行门原先用 sim/run_sim._ALLOW_LEAD 手写动词表，与 registry 白名单
+    差 15 个命令（iotop/numastat/getent/tail/top…真机白名单档批量取证暴露），
+    身为白名单路由放行、执行门误拒——分叉实锤后废弃手抄，改为：
+      registry 白名单（gen_sudoers extract 产物，结构性排除 action/解释器/
+      deny）∪ sim/run_sim._ALLOW_LEAD（本机 sim 侧既有的动词表，覆盖 echo/
+      for/find/uptime 等本机专用形态）。
+    自研采集器 opsaxiom-collect 亦从 sim 名单继承。算不出 registry 时退化
+    仅 sim 名单（本机行为不变，远端白名单档 fail-closed 由名单空集保证）。"""
+    sim_leads = set()
+    try:
+        from run_sim import _ALLOW_LEAD       # sim 侧既有动词表（单一来源）
+        sim_leads = set(_ALLOW_LEAD)
+    except Exception:
+        pass
+    try:
+        sys.path.insert(0, str(HERE / "authoring"))
+        import gen_sudoers as G
+        reg_root = G.default_skills_root()
+        if reg_root:
+            sim_leads |= {b for b, _p in G.scan_skills_dir(reg_root)}
+    except Exception:
+        pass                                  # registry 不可用：仅 sim 名单
+    return sim_leads
 
 
 def sudo_routed(target_name, cmd, targets=None):
@@ -224,11 +306,13 @@ def run_remote(target_name, cmd, *, params=None, targets=None,
         rc, out, err = fn(t, cred, exec_cmd)
     except Exception as e:                       # noqa: BLE001
         # 连接器异常（连不上/执行超时）也审计——命令已打到远端，无痕即盲区；
-        # 空 str 异常（socket.timeout）记类名，别留空 err（真机教训）
+        # 空 str 异常（socket.timeout）记类名，别留空 err（真机教训）；
+        # err_kind 结构化类别供上层 fail-fast 判定（不靠错误文本猜，裁定 3）
         _audit({"ts": _stamp(now), "target": target_name, "host": t.get("host"),
                 "connector": conn, "cmd": exec_cmd, "decision": "error",
                 "cred_kind": cred.kind, "exec_as": exec_as,
                 "tier": "root" if root_tier else "whitelist",
+                "err_kind": err_kind(e),
                 "err": (str(e).strip() or type(e).__name__)[:200]})
         raise
     # 6. 审计（凭证绝不入审计——只记 kind，不记材料；实际身份与档位单独记录）
@@ -242,6 +326,28 @@ def run_remote(target_name, cmd, *, params=None, targets=None,
     if rc != 0 and not out:
         raise GateError(f"远端执行返回码 {rc}：{err.strip()[:200]}")
     return out
+
+
+def err_kind(e):
+    """异常 → 结构化错误类别（十七轮评审裁定 3：fail-fast 判定弃用错误文本
+    匹配——远端 stderr 会拼进 err 消息（rc 分支），中文报错含"连接"二字会把
+    rc 级失败误判成连接级，整轮静默跳过贴回丢证据）。类别：
+      connect  连接级失败（拨不通/banner reset/VPN 抖动）——唯一可 fail-fast
+      timeout  执行超时（命令已到远端）→ 转贴回
+      exec     其他执行/连接器异常（含 SSHError）→ 转贴回
+    边界语义（F-22 校准）：ssh 连接器已把底层网络故障（socket.timeout（Py3.8
+    类名 timeout）/ConnectionError/OSError）在连接器层包成 SSHConnectError/
+    SSHError，故按类映射即得正确二分；network 连接器只抛 NetworkError 且统一
+    归 exec——拨不通与执行失败不区分是【有意保守】（network 无 fail-fast，
+    不静默丢证据），T-5 注记同此口径。"""
+    name = type(e).__name__
+    if name == "SSHConnectError":
+        return "connect"
+    if name in ("ConnectionError", "ConnectionResetError", "ConnectionRefusedError"):
+        return "connect"
+    if name == "TimeoutError":
+        return "timeout"
+    return "exec"
 
 
 def _default_connector(connector):

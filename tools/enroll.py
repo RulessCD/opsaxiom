@@ -159,11 +159,21 @@ def create_ro_user(cli, pub, sudoers_text, user=ENROLL_USER, sudoer_bins=None):
     ]
     if sudoer_bins:
         import gen_sudoers as G
-        paths = resolve_bin_paths(cli, sudoer_bins)
+        # sudoer_bins 可能为 [(bin, prefix), ...] 完整条目（新）或 [bin, ...]
+        # 裸名清单（旧签名兼容）。前缀决定远端 sudoers 的参数范围（B-1：
+        # 复合型二进制 systemctl/ip 等若丢前缀 = 任意子命令提权，物理闸穿透）。
+        entries = []
+        for item in sudoer_bins:
+            if isinstance(item, tuple):
+                entries.append(item)
+            else:
+                entries.append((item, None))
+        bins = sorted({b for b, _p in entries})
+        paths = resolve_bin_paths(cli, bins)
         if not paths:
             return False, "白名单命令在目标机全部解析不到绝对路径（command -v 全空）"
         path_text = G.render_sudoers_file(
-            [(n, None) for n in sudoer_bins if n in paths],
+            [e for e in entries if e[0] in paths],
             user=user, bin_paths=paths)
         cmds += [
             # 临时文件 → visudo 校验 → 过了才 install 落位

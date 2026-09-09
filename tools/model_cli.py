@@ -194,7 +194,7 @@ FAIL_MSG = ("本地不具备安装本地小模型的依赖或资源，请连接�
 
 
 def check_local_ready(disk_usage=None, meminfo_path="/proc/meminfo",
-                      which=None, geteuid=None, net_probe=None):
+                      which=None, geteuid=None, net_probe=None, system=None):
     """安装前体检：平台/权限/磁盘/内存/网络。返回问题清单（空=可装）。
     各探测点可注入（测试用），默认真实探测。"""
     import platform
@@ -202,9 +202,10 @@ def check_local_ready(disk_usage=None, meminfo_path="/proc/meminfo",
     disk_usage = disk_usage or shutil.disk_usage
     which = which or shutil.which
     geteuid = geteuid or getattr(os, "geteuid", lambda: 0)
+    system = system or platform.system()
     problems = []
-    if platform.system() != "Linux":
-        problems.append(f"仅支持 Linux 一键安装（当前 {platform.system()}）")
+    if system != "Linux":
+        problems.append(f"仅支持 Linux 一键安装（当前 {system}）")
     have_ollama = bool(which("ollama"))
     if not have_ollama and geteuid() != 0 and not which("sudo"):
         problems.append("安装 ollama 需要 root 或 sudo（当前都没有）")
