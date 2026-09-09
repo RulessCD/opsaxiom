@@ -80,7 +80,7 @@ def test_builtins_dont_crash(capsys):
     r._handle("info nonexistent.skill")
     out = capsys.readouterr().out
     # 帮助文案随版本演进，这里只断言关键信息仍在
-    assert "诊断运维问题" in out and "决策树" in out and "没有这个 Skill" in out
+    assert "问题诊断" in out and "决策树" in out and "没有这个 Skill" in out
 
 
 def test_no_tty_refuses(monkeypatch, capsys):
