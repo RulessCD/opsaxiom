@@ -129,18 +129,15 @@ def split_segments(cmd):
     return segs
 
 
-def extract_entries(cmd):
-    """一条命令字符串 → set[(bin, arg_prefix)]。
-    只收**命令首段**的二进制：sudo 的提权语义只罩住"我们发出的一整条命令"里
-    以 sudo 运行的那一段——管道/复合的其他段不会以 sudo 身份跑，白名单里
-    收它们只会扩权（v2 教训）。首段 = 引号感知切分后的第一段；
-    若它是 `sudo`/`-n`/`-u` 变体则穿透；控制词/flag/解释器/deny 名单不算。
-    arg_prefix = 二进制后的第一个非 flag token（如 systemctl 的子命令）；
-    其余参数为 `*`（只读命令参数不可枚举）。二进制名形态校验。"""
-    out = set()
+def lead_tokens(cmd):
+    """命令字符串 → (首段可执行体裸名, 全部 token, 裸名下标) 或 None。
+    引号感知切段取首段、剥子 shell 括号/数字重定向、sudo 穿透、基名归一。
+    【只做形态校验】——解释器/提权跳板（_INTERPRETERS）与写面客户端
+    （_DENY_BINS）的硬拒留给调用方按各自边界决定：sudoers 提取（extract_entries）
+    与运行时只读动词判定（gate 派生名单，T-6）的边界不同，共用于此。"""
     segs = split_segments(cmd)
     if not segs:
-        return out
+        return None
     seg = segs[0].strip()
     # 跳过子 shell 段首的 ( 与 {（v1 不进子 shell 内部）
     toks = [t for t in seg.split() if t not in ("(", ")")]
@@ -148,19 +145,35 @@ def extract_entries(cmd):
     while toks and re.match(r"^\d*>(/|\S)", toks[0]):
         toks = toks[1:]
     if not toks:
-        return out
+        return None
     i = 0
     while i < len(toks) and toks[i] in ("sudo", "-n", "-u"):
         i += 1
     if i >= len(toks):
-        return out
+        return None
     name = toks[i]
     name = name.rsplit("/", 1)[-1]         # 相对路径取基名
     if not name or name in _CTRL or name.startswith("-"):
-        return out
-    if name in _INTERPRETERS or name in _DENY_BINS:
-        return out
+        return None
     if not re.match(r"^[A-Za-z0-9_.@+\-]+$", name):
+        return None
+    return name, toks, i
+
+
+def extract_entries(cmd):
+    """一条命令字符串 → set[(bin, arg_prefix)]。
+    只收**命令首段**的二进制：sudo 的提权语义只罩住"我们发出的一整条命令"里
+    以 sudo 运行的那一段——管道/复合的其他段不会以 sudo 身份跑，白名单里
+    收它们只会扩权（v2 教训）。首段解析（sudo 穿透/引号/重定向/基名）见
+    lead_tokens；解释器类硬拒（GTFOBins）；deny 名单结构性排除。
+    arg_prefix = 二进制后的第一个非 flag token（如 systemctl 的子命令）；
+    其余参数为 `*`（只读命令参数不可枚举）。二进制名形态校验。"""
+    out = set()
+    led = lead_tokens(cmd)
+    if not led:
+        return out
+    name, toks, i = led
+    if name in _INTERPRETERS or name in _DENY_BINS:
         return out
     # 前缀 = 二进制后的第一个"有区分度"的 token（仅对复合型二进制有意义）：
     #   - 子命令词（systemctl is-active → "is-active"）

@@ -327,3 +327,47 @@ def test_rc_level_failure_with_connect_word_is_exec_not_connect(tmp_path, monkey
     assert rec["err_kind"] == "exec"          # 文本含"连接"≠连接级
     assert gate.err_kind(Exception("连接超时")) == "exec"   # 裸 Exception 同样从宽
 
+
+# ---------- F-28：执行门只读名单同源派生（运行时镜像分叉，真机暴露）----------
+
+def test_runtime_gate_allows_registry_whitelisted_probes(tmp_path, monkeypatch):
+    """F-28 回归：白名单路由放行（_wl_member 吃 registry extract 产物）后，
+    执行门二次校验不得用另一份手抄动词表误拒（真机白名单档批量取证实曝：
+    iotop/numastat/getent/tail/top 等 15 个 registry 收录命令被执行门
+    "写/非只读命令"误拒）。派生名单 = registry ∪ sim._ALLOW_LEAD，
+    特判（kubectl 写动词 / mount 无参查询、带参挂载）与写词 DENY 保持既有。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "df -B1 / | grep -v tmpfs")
+    # iotop 探针进 mini registry（白名单路由成员资格的来源）
+    sk2 = tmp_path / "hub" / "registry" / "skills" / "t.z" / "0.1.0" / "skill.yaml"
+    sk2.parent.mkdir(parents=True, exist_ok=True)
+    sk2.write_text(yaml.safe_dump({
+        "metadata": {"id": "t.z"}, "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "check", "run": {"linux":
+                "iotop -b -n 2 -o -k 2>/dev/null | head -15"}}]}}),
+        encoding="utf-8")
+    # 白名单路由放行（这条探针走白名单档）
+    assert gate._wl_member("iotop -b -n 2 -o -k 2>/dev/null | head -15") is True
+    # 执行门必须同时放行（修复点：此前这里 False → 误拒）
+    assert gate._readonly_ok("ssh", "iotop -b -n 2 -o -k 2>/dev/null | head -15") is True
+    # 既有拒绝语义不回退
+    assert gate._readonly_ok("ssh", "rm -rf /data") is False
+    assert gate._readonly_ok("ssh", "cat /etc/shadow > /tmp/x") is False
+    assert gate._readonly_ok("ssh", "mount /dev/vdb /mnt") is False      # 带参挂载
+    assert gate._readonly_ok("ssh", "mount | grep -c ro") is True        # 无参查询
+    assert gate._readonly_ok("ssh", "kubectl get pods") is True
+    assert gate._readonly_ok("ssh", "kubectl delete pod x") is False
+
+
+def test_runtime_ro_leads_consumes_registry_not_mirror(tmp_path, monkeypatch):
+    """牙口（F-20 纪律）：_runtime_ro_leads 必须消费 registry——清空 registry
+    名单联动断言。手写镜像测试（往名单里写死 iotop）拦不住再分叉；此处
+    造一个空 registry + sim 动词表注入验证并集语义。"""
+    _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    # registry 里只有 systemctl is-active；派生名单必含之，且含 sim 侧既有 echo
+    leads = gate._runtime_ro_leads()
+    assert ("systemctl", "is-active") in gate._allow_entries()
+    assert "systemctl" in leads and "echo" in leads
+    # 静态防御：sim/run_sim._ALLOW_LEAD 仍是 sim 侧单一来源，gate 不再单独维护
+    import run_sim
+    assert gate._runtime_ro_leads() >= {b for b, _p in gate._allow_entries()}
+

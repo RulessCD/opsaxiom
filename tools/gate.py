@@ -92,9 +92,21 @@ def _http_readonly(method):
 
 
 def _readonly_ok(connector, cmd, target=None):
-    """按 connector 类型判只读。ssh/kubectl 复用 _is_readonly（同一套白名单）。"""
+    """按 connector 类型判只读。ssh/kubectl 走派生名单（T-6 同源）：
+    registry 白名单 ∪ sim/run_sim._ALLOW_LEAD（_runtime_ro_leads），再叠加
+    sim 的 _DENY 写词/重定向拒绝与 kubectl 写动词判定。原先直接复用
+    _is_readonly（手写 _ALLOW_LEAD），与 registry 白名单差 15 个命令，
+    白名单档放行后执行门误拒（真机暴露）。"""
     if connector in ("ssh", "kubectl"):
-        return _is_readonly(cmd)
+        try:
+            toks = cmd.strip().split()
+        except Exception:
+            return False
+        lead = toks[0].rsplit("/", 1)[-1] if toks else ""
+        if lead in ("kubectl", "mount"):
+            return _is_readonly(cmd)          # 语义特判仍在 sim（kubectl 写动词 /
+        from run_sim import _DENY             # mount 无参=查询、带参=挂载）
+        return lead in _runtime_ro_leads() and not _DENY.search(cmd)
     if connector == "network":
         platform = (target or {}).get("platform", "cisco_ios")
         return _network_readonly(platform, cmd)
@@ -182,6 +194,33 @@ def _composite_union():
     except Exception:
         return set()                          # 分不清时退"无复合型"——裸名条目
                                               # 本就只可能来自非复合型，安全
+
+
+def _runtime_ro_leads():
+    """运行时只读动词全集（T-6 同源派生，非手写镜像）。
+    历史：执行门原先用 sim/run_sim._ALLOW_LEAD 手写动词表，与 registry 白名单
+    差 15 个命令（iotop/numastat/getent/tail/top…真机白名单档批量取证暴露），
+    身为白名单路由放行、执行门误拒——分叉实锤后废弃手抄，改为：
+      registry 白名单（gen_sudoers extract 产物，结构性排除 action/解释器/
+      deny）∪ sim/run_sim._ALLOW_LEAD（本机 sim 侧既有的动词表，覆盖 echo/
+      for/find/uptime 等本机专用形态）。
+    自研采集器 opsaxiom-collect 亦从 sim 名单继承。算不出 registry 时退化
+    仅 sim 名单（本机行为不变，远端白名单档 fail-closed 由名单空集保证）。"""
+    sim_leads = set()
+    try:
+        from run_sim import _ALLOW_LEAD       # sim 侧既有动词表（单一来源）
+        sim_leads = set(_ALLOW_LEAD)
+    except Exception:
+        pass
+    try:
+        sys.path.insert(0, str(HERE / "authoring"))
+        import gen_sudoers as G
+        reg_root = G.default_skills_root()
+        if reg_root:
+            sim_leads |= {b for b, _p in G.scan_skills_dir(reg_root)}
+    except Exception:
+        pass                                  # registry 不可用：仅 sim 名单
+    return sim_leads
 
 
 def sudo_routed(target_name, cmd, targets=None):

@@ -452,13 +452,9 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
 - **F-22（P2，已修）**：err_kind 死条目清除（socket.timeout 类名为 timeout、
   NetworkDownError 无定义者）；network 统一归 exec 的"有意保守"口径写入
   err_kind docstring 与 docs/07 T-5。
-- **F-22（P2，已修）**：err_kind 死条目清除（socket.timeout 类名为 timeout、
-  NetworkDownError 无定义者）；network 统一归 exec 的"有意保守"口径写入
-  err_kind docstring 与 docs/07 T-5。
 - **F-24/F-25/F-27（P2，Fable 二轮，已随手修）**：测试名单改 gen_sudoers 派生
   （F-24）；对称性近似函数补"裸名条目=任意参数"支路（sudoers(5) 手册语义，
   F-25）；flock/nsenter/unshare/setpriv/capsh/machinectl 入 _INTERPRETERS
-  防御纵深（F-27）。近似函数教训补入 T-6。
   防御纵深（F-27）。近似函数教训补入 T-6。
 - **F-26（P2，发起人裁定收窄，已执行）**：mount/conntrack/kafka-topics.sh 入
   _DENY_BINS（2026-09-09）——裸名条目=任意参数含写动作（挂任意盘/删状态表/
@@ -466,3 +462,19 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   白名单档转贴回。回归测试 test_f26_write_face_bins_never_whitelisted。
 - 真机回归清单（对应 HANDOFF 待办①）新增一条：`sudo -n systemctl --failed
   restart nginx` 须被远端拒（F-19 专属探针）。
+
+## 十七轮真机回归暴露（2026-09-09，高等云肆重开通实测）
+
+- **F-28（P1，已修）**：运行时执行门只读名单第三镜像分叉。真机白名单档批量
+  取证实曝：`iotop -b … \|\| pidstat` 被执行门以"写/非只读命令"误拒——路由层
+  `_wl_member` 吃 registry extract 产物（同源 ✓），执行门 `_readonly_ok` 却
+  复用 sim/run_sim._ALLOW_LEAD 手写动词表（15 个 registry 收录命令缺席：
+  iotop/numastat/getent/tail/top/getenforce/ibstat/perfquery/squeue/
+  nstat/slabtop/pgrep/timedatectl/systemd-detect-virt/kafka-broker-api-versions.sh）。
+  修复守 T-6：gen_sudoers 新增 lead_tokens（形态解析与硬拒过滤分离），
+  gate 新增 _runtime_ro_leads() = registry 白名单 ∪ sim._ALLOW_LEAD 派生
+  （不手抄），_readonly_ok 改吃派生名单；kubectl/mount 语义特判与 _DENY
+  写词照旧。回归：test_runtime_gate_allows_registry_whitelisted_probes +
+  test_runtime_ro_leads_consumes_registry_not_mirror（并集联动断言）。
+  教训：T-6 的"镜像"范畴从测试助手扩到【任何消费方之外的名单拷贝】——
+  运行时执行门自己的手写动词表同样是镜像。
