@@ -39,11 +39,18 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-09（十七轮二轮返工：F-19~F-23 全修，白名单 v3 语义）
+- **更新时间**：2026-09-09（十七轮真机回归通过 + F-28，两档全验证）
 - **更新者**：Opus 4.8（工程实现）
-- **阶段**：**Fable 二轮复核裁定【合并】（3d53739），P2 全清（3c02d8a +
-  F-26 收窄），814 passed / 5 skipped 全绿。代码侧收口，下一步仅剩：
-  真机两档回归（外人无法代跑，需发起人配合）→ push 合并 main**
+- **阶段**：**真机两档回归通过（高等云肆 223.193.41.38:32147，Ubuntu 实机）**：
+  ① v3 白名单重开通 31 条落盘/visudo 通过/写面零在场；② sudoers 全绝对路径、
+  systemctl 仅 is-active/show/status 只读形态；③ 对抗探针（systemctl --failed
+  restart / mount / sysctl -w / journalctl -u / numactl -H）ro 账号下全部
+  rc=1 拒绝，正向 is-active/df rc=0；④ 白名单档批量取证正确分流（mount 贴回=
+  F-26 生效）；⑤ grant 后 root 档全自动（audit tier=root/exec_as=root）。
+  过程中真机暴露 **F-28**（执行门 _readonly_ok 复用 sim 手写 _ALLOW_LEAD，
+  与 registry 名单差 15 命令 → 白名单档 iotop 等被误拒），已修（5704be6，
+  gate._runtime_ro_leads = registry ∪ sim 派生，守 T-6），修复后 iotop 探针
+  executed、贴回 2→1 条。814 passed / 5 skipped。
 - **二轮返工交付（对应 REVIEW-QUEUE"十七轮二轮返工对账"，Fable 复核结论）**：
   - **F-19（P0）白名单 v3**：flag 前缀条目结构性禁止（flag 与命令词正交，
     `--failed *` 挡不住 `--failed restart`）。复合型只认只读子命令白名单
@@ -59,9 +66,8 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
     target/贴回调用清单），恒真断言清除。
   - **F-22 err_kind 死条目清除 + network 保守口径注记**（docstring + T-5）。
   - 测试：**813 passed / 5 skipped**（新增牙口锁定与对称性双向断言）。
-- **下一步**：① 真机两档回归（sudoers 形态再变，远端重跑 add + visudo + F-19
-  专属探针 `sudo -n systemctl --failed restart nginx` 应被拒）→ ② Fable 复核
-  → ③ 合并 push。待办（发起人）：#12 opsaxiom update 子命令、#13 气隙离线包。
+- **下一步**：合并 rework-b1-err-kind → main 并 push（回归全对上，条件已满足）。
+  待办（发起人）：#12 opsaxiom update 子命令、#13 气隙离线包。
 - **十七轮一轮返工交付（已被二轮返工覆盖，存档）**：
   - **B-1（P0）sudoers 前缀闸**：enroll 渲染时 (bin,prefix) 被降成裸名 → 复合型
     二进制（systemctl 等）任意子命令 root 可达。修复四件套：gen_sudoers 复合型
