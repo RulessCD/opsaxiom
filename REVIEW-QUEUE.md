@@ -498,3 +498,22 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   回归 2 件：TTL 内命中跳过粘贴（paste 被调用即炸）+ TTL 过期不复用（test_runtime.py）。
 - **普通 `run <id>` 路径不变**：不带 store，行为与之前一致（重新收集）。
 - 测试：**818 passed / 5 skipped**（本轮 +4）。
+
+## #12 opsaxiom update 落地（Opus，2026-09-09，待 Fable 复核）
+
+- **tools/update.py 新增**：四步时序 ① git pull --ff-only（非 git 检出面/
+  未配远程 → 干净跳过 rc=0；真失败红停并列手动处理提示）② 依赖哈希检测
+  （tools/requirements.txt sha256 vs .venv/deps.sha256，变了才 pip 重装并落
+  新哈希；pip 失败🟡不阻断，doctor 报影响面）③ hub sync（离线🟡降级提示）
+  ④ doctor 收尾（必需项红 → 更新退出码非 0）。
+- **接线**：tools/bin/opsaxiom 子命令注册（try-import 风格同邻）；repl
+  _delegate 分发 + _welcome 菜单【3. 配置设置】doctor 之下加 update 行
+  （发起人补充口径 2026-09-09）。
+- **实机验证**：本仓库两连跑——首跑"代码已是最新 / 依赖有更新，重装 / 库已同步
+  205 / doctor 绿 rc=0"；二跑确认哈希落盘生效（"依赖未变化，跳过重装"）。
+- **测试 +12**（tools/tests/test_update.py）：pull 三支路（非 git 跳过/未配远程
+  跳过/真失败透传 rc）、哈希往返与缺失文件、时序失败即停（git 红停不触 hub）、
+  pip 失败不阻断（hub 照常同步 + doctor 照常收尾）、hub 离线降级、真 git 仓库
+  端到端绿。
+- 设计取舍：更新=本地 git pull（用户面向"更新到最新"），不发明升级协议；
+  重装检测按 requirements 哈希（诚实：变没变文件的字节说了算，不猜提交号）。

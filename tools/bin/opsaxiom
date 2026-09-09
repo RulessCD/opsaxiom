@@ -129,6 +129,11 @@ def main():
         add_cred(sub)
     except Exception:
         pass
+    try:
+        from update import add_update  # #12 自更新
+        add_update(sub)
+    except Exception:
+        pass
     # N-3 入口策略：pi 智能入口优先，Python REPL 零依赖兜底（R3 不破）
     import sys as _sys
     argv1 = _sys.argv[1] if len(_sys.argv) > 1 else None

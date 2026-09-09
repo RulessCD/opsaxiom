@@ -39,9 +39,21 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-09（回流点②收官：v1 处置消费 FactStore，发起人口径落地）
+- **更新时间**：2026-09-09（#12 opsaxiom update 落地：自更新四步时序；上一轮回流点②收官）
 - **更新者**：Opus 4.8（工程实现）
-- **本轮交付（回流点②，对应 REVIEW-QUEUE"回流点②收官"）**：
+- **本轮交付（#12 opsaxiom update，发起人补充：菜单挂【3. 配置设置】doctor 之下）**：
+  - **tools/update.py 新增**：四步时序 ① git pull --ff-only（非 git 检出面/
+    未配远程 → 跳过不阻断；真失败红停）② requirements 哈希检测（.venv/deps.sha256
+    落盘对比，变了才 pip 重装；pip 失败🟡不阻断）③ hub sync（离线🟡降级）
+    ④ doctor 收尾（必需项红 → 更新判失败）。
+  - 接线三处：tools/bin/opsaxiom 子命令注册、repl._delegate 分发、
+    _welcome 菜单【3. 配置设置】doctor 下加一行。
+  - 实机验证（本仓库两连跑）：首跑依赖哈希差异→重装→落盘新哈希；二跑
+    "依赖未变化，跳过重装"；全程 doctor 绿，rc=0。
+  - 测试 +12（tools/tests/test_update.py：pull 跳过/失败透传、哈希往返、
+    时序失败即停、pip 失败不阻断、hub 离线降级、真仓库端到端）。
+  - **834 passed / 5 skipped**（全量；墙钟 5h 系 github 不可达网络测试等超时，非用例慢）。
+- **上一轮（回流点②收官）交付**：
   - **repl._offer_treatment 重写**：可处置假设全部列出让用户选（回车=第 1 项/
     序号/q 跳过），修复原 return-早退只提第一条的静默缺陷。
   - **repl._run_treatment 新增**：确认假设续接 v1 时 `facts=inc.store,
@@ -49,14 +61,7 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
   - **runtime.Session facts 槽**：`_facts_hit` 走 get_parsed 公共 API +
     `_absorb_parsed` 镜像并入；命中复用（reused=true 入审计）、过期诚实重采。
   - 普通 `run <id>` 不带 store，路径不变。
-  - 测试：**818 passed / 5 skipped**（+4）。
-  回顾总结已更新（本节+REVIEW-QUEUE）。
-- **上一轮**（十七轮真机回归 + F-28，两档全验证）真机两档回归通过（高等云肆 223.193.41.38:32147，Ubuntu 实机）**：
-  ① v3 白名单重开通 31 条落盘/visudo 通过/写面零在场；② sudoers 全绝对路径、
-  systemctl 仅 is-active/show/status 只读形态；③ 对抗探针（systemctl --failed
-  restart / mount / sysctl -w / journalctl -u / numactl -H）ro 账号下全部
-  rc=1 拒绝，正向 is-active/df rc=0；④ 白名单档批量取证正确分流（mount 贴回=
-  F-26 生效）；⑤ grant 后 root 档全自动（audit tier=root/exec_as=root）。
+  - **818 passed / 5 skipped**（该轮计数）。
   过程中真机暴露 **F-28**（执行门 _readonly_ok 复用 sim 手写 _ALLOW_LEAD，
   与 registry 名单差 15 命令 → 白名单档 iotop 等被误拒），已修（5704be6，
   gate._runtime_ro_leads = registry ∪ sim 派生，守 T-6），修复后 iotop 探针
@@ -76,8 +81,8 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
     target/贴回调用清单），恒真断言清除。
   - **F-22 err_kind 死条目清除 + network 保守口径注记**（docstring + T-5）。
   - 测试：**813 passed / 5 skipped**（新增牙口锁定与对称性双向断言）。
-- **下一步**：Fable 复核回流点②批（REVIEW-QUEUE 末节）→ 合并 main 并 push。
-  待办（发起人）：#12 opsaxiom update 子命令、#13 气隙离线包。
+- **下一步**：push main（github 不可达， hiccup 连三笔提交待推）→ Fable 复核
+  （回流点②批 + #12 update，REVIEW-QUEUE 末两节）。待办（发起人）：#13 气隙离线包。
 - **十七轮一轮返工交付（已被二轮返工覆盖，存档）**：
   - **B-1（P0）sudoers 前缀闸**：enroll 渲染时 (bin,prefix) 被降成裸名 → 复合型
     二进制（systemctl 等）任意子命令 root 可达。修复四件套：gen_sudoers 复合型

@@ -111,6 +111,7 @@ class Repl:
         print("     sync             手动同步社区 Skill（系统 24h 自动）")
         print("3. 配置设置：")
         print("     doctor           环境自检")
+        print("     update           自更新：代码→依赖→Skill 库→自检")
         print("     overlay <id>     为指定 skill 生成个人叠加层")
         print("     model            配置大模型")
         print("     target           接入设备管理")
@@ -1182,7 +1183,7 @@ class Repl:
         sub = ap.add_subparsers(dest="cmd")
         for mod, fn in (("doctor", "add_doctor"), ("capture_cli", "add_capture"),
                         ("hub_cli", "add_hub"), ("model_cli", "add_model"),
-                        ("target_cli", "add_target")):
+                        ("target_cli", "add_target"), ("update", "add_update")):
             try:
                 m = __import__(mod)
                 getattr(m, fn)(sub)
@@ -1256,7 +1257,7 @@ class Repl:
             self._sweep_incident(); return
         if head == "report":
             self._report(); return
-        if head in ("doctor", "hub", "record", "skill", "model", "target"):
+        if head in ("doctor", "hub", "record", "skill", "model", "target", "update"):
             self._delegate(parts)
             if head == "model":                     # 配置可能变了，热重载
                 try:
