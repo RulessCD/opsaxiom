@@ -137,11 +137,18 @@ proc（变更单/故障报告/交接摘要）不诊断、无命令，但仍用 `
   （rc 分支），中文报错含"连接"二字把 rc 级失败误判成连接级，整轮静默跳过
   贴回丢证据）。弃文本匹配，`gate.err_kind(e)` 按异常类归
   connect/timeout/exec 三类；报告带 err_kind 字段，上层按它聚合。
-- **T-6 registry 同步纪律：改 Skill 探针必须同轮改齐【仓库存档】与
-  【~/.opsaxiom/hub/registry】两份**（十六轮真机暴露：inode-exhausted 上轮漏修
-  `df -i --output` 互斥 + registry 未同步，修了仓库真机照样坏；registry 是独立
-  git 仓库，不会随仓库 commit 自动同步）。同型：白名单清单与远端
-  /etc/sudoers.d 也是两份事实——gate._wl_member 与 gen_sudoers 必须同源同函数。
+  边界口径：network 连接器统一归 exec 是【有意保守】——不区分拨不通/执行
+  失败，network 无 fail-fast、不静默丢证据。
+- **T-6 双份事实必须同源产出、成对更新：改 Skill 探针必须同轮改齐
+  【仓库存档】与【~/.opsaxiom/hub/registry】两份**（十六轮真机暴露：inode-exhausted
+  上轮漏修 `df -i --output` 互斥 + registry 未同步，修了仓库真机照样坏；registry
+  是独立 git 仓库，不会随仓库 commit 自动同步）。同型：白名单清单与远端
+  /etc/sudoers.d 也是两份事实——客户端成员判定（gate._wl_member）不是对
+  gen_sudoers 的"手写镜像"而是**消费同一 extract_entries 产物**：手写镜像必分叉
+  （-u skip 表事故、startswith 宽松匹配与 fnmatch 不等价，均实证过）；
+  "互证测试"必须测【对称性】（客户端 True ⟺ sudoers fnmatch 命中，双向断言），
+  只测"登记形态自身能放行"拦不住镜像分叉。同类：修探针还须重跑向导刷新远端
+  sudoers（条目形态随 Skill 库变化）。
 
 ---
 （本文件随每轮评审增补。新教训 → 新条目 → 下一轮生成 prompt。）

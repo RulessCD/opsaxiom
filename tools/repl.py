@@ -1089,13 +1089,17 @@ class Repl:
                   "检查 VPN/网络后用 target doctor 体检，再重跑本诊断；"
                   "该目标本轮不转人工贴回（你同样连不上）。")
         # 失败探针并入贴回，【死目标的除外】——你同样连不上，贴了也没意义；
-        # 活目标/非连接级失败的照常转人工补证据（裁定 3：按 err_kind 判，不猜文本）
-        failed_cmds = {r["cmd"] for r in failed
+        # 活目标/非连接级失败的照常转人工补证据（裁定 3：按 err_kind 判，不猜文本）。
+        # 以 (target, cmd) 定位：同探针多目标是多目标事件常态，(cmd) 单键会把
+        # 活目标的失败波及死目标的同名 probe、或反之漏配（F-21 回放实证）。
+        failed_cmds = {(r.get("target", I.LOCAL), r["cmd"]) for r in failed
                        if r.get("target", I.LOCAL) not in dead_targets}
         if failed_cmds:
-            already = {p["cmd"] for _, p in manual_items}
+            done = {(t, q["cmd"]) for t, q in manual_items}
             for p in sweep.flatten(inc.plan()):
-                if p["cmd"] in failed_cmds and p["cmd"] not in already:
+                k = (p["target"], p["cmd"])
+                if k in failed_cmds and k not in done:
+                    done.add(k)
                     manual_items.append((p["target"], p))
 
         if manual_items:

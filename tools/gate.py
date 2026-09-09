@@ -119,7 +119,10 @@ def _stamp(now=None):
 
 def _allow_entries():
     """registry 白名单成员（(bin, prefix|None) 全集）。与写入远端
-    /etc/sudoers.d/opsaxiom-ro 的清单同源同函数（gen_sudoers）。
+    /etc/sudoers.d/opsaxiom-ro 的清单**消费同一 scan_skills_dir/extract_entries
+    产物**（gen_sudoers）——不是手写镜像：镜像必分叉（-u skip 事故、
+    startswith≠fnmatch，T-6 注记），"互证"只测登记形态不测对称性；
+    对称性由 test_wl_member_prefix_mirror_matches_sudoers 双向锁定。
     算不出 → 空集（fail-closed：不提权）。"""
     try:
         sys.path.insert(0, str(HERE / "authoring"))
@@ -139,10 +142,16 @@ def _allow_bins():
 
 def _wl_member(cmd):
     """命令是否在 registry 白名单内（与写远端 sudoers 同源，gen_sudoers）。
-    首段二进制在名单内还不够：复合型二进制（systemctl/ip/journalctl…，
-    gen_sudoers._COMPOSITE_LEAD）还须首个带区分度 token 匹配已登记
-    子命令/flag 前缀（B-1：远端 sudoers 按前缀放行，`systemctl restart`
-    之类未登记形态物理不可达；客户端同源判定，不给死路由）。"""
+    首段二进制在名单内还不够：
+      + 复合型二进制（_COMPOSITE_LEAD）永不裸名放行（B-1）；
+      + 复合型只认 _RO_COMPOSITE_SUBCMDS 登记的只读子命令作前缀（v3，F-19）：
+        flag 前缀（--failed/-u/--query-*…）与命令词正交，sudoers 尾通配关不住
+        其后的写子命令/写 flag（`systemctl --failed restart nginx` 实测穿透），
+        故 flag 一律不放行——该探针白名单档转贴回；
+      + 非复合型（语义固定单用途）裸名即过，但 deny/解释器名单不在登记里
+        （gen_sudoers 已滤）。
+    客户端与远端 sudoers 由 gen_sudoers 同一 extract_entries 产出，互证测试
+    test_wl_member_prefix_mirror_matches_sudoers 锁定同源性。"""
     import shlex
     try:
         toks = shlex.split(cmd.strip())
@@ -152,31 +161,27 @@ def _wl_member(cmd):
         return False
     first = toks[0].rsplit("/", 1)[-1]
     entries = _allow_entries()
-    if not any(b == first for b, _p in entries):
-        return False
+    if (first, None) in entries:
+        # 非复合型裸名条目：远端 sudoers 为 `bin *` 全参放行，同形态直通
+        return first not in _composite_union()
+    if first in _composite_union():
+        # 复合型：须为「子命令」前缀形态且该前缀已登记（只读子命令白名单）
+        sub = toks[1] if len(toks) > 1 else None
+        if sub is None or sub.startswith("-") or sub.startswith("{{"):
+            return False                      # 裸/flag/模板段：远端无此条目
+        return (first, sub) in entries        # 精确匹配（无 startswith 宽松）
+    return False
+
+
+def _composite_union():
+    """复合型二进制全集（gen_sudoers._COMPOSITE_LEAD 同源；取不到则空集从严）。"""
     try:
         sys.path.insert(0, str(HERE / "authoring"))
         import gen_sudoers as G
-        composite = first in G._COMPOSITE_LEAD
+        return set(G._COMPOSITE_LEAD)
     except Exception:
-        composite = True                # 分不清时按复合型从严
-    if not composite:
-        return True
-    # 复合型：首个 flag/子命令须在已登记前缀内（排队跳过 sudo 变体/控制词）
-    prefix = None
-    for tok in toks[1:]:
-        if tok in ("sudo", "-n", "-u") or tok in G._CTRL or \
-                (tok[:1].isdigit() and ">" in tok):
-            continue
-        if tok[:1] == ">":
-            continue
-        prefix = tok
-        break
-    if prefix is None:
-        return False                    # 复合型无前缀形态：物理闸关死，转贴回
-    return (first, prefix) in entries or \
-        any(b == first and str(p).startswith(prefix) and p is not None
-            for b, p in entries)
+        return set()                          # 分不清时退"无复合型"——裸名条目
+                                              # 本就只可能来自非复合型，安全
 
 
 def sudo_routed(target_name, cmd, targets=None):
@@ -291,14 +296,17 @@ def err_kind(e):
       connect  连接级失败（拨不通/banner reset/VPN 抖动）——唯一可 fail-fast
       timeout  执行超时（命令已到远端）→ 转贴回
       exec     其他执行/连接器异常（含 SSHError）→ 转贴回
-      GateError 不经此（先于连接器抛出），unknown 从严不当作 connect"""
+    边界语义（F-22 校准）：ssh 连接器已把底层网络故障（socket.timeout（Py3.8
+    类名 timeout）/ConnectionError/OSError）在连接器层包成 SSHConnectError/
+    SSHError，故按类映射即得正确二分；network 连接器只抛 NetworkError 且统一
+    归 exec——拨不通与执行失败不区分是【有意保守】（network 无 fail-fast，
+    不静默丢证据），T-5 注记同此口径。"""
     name = type(e).__name__
     if name == "SSHConnectError":
         return "connect"
-    if name in ("ConnectionError", "ConnectionResetError", "ConnectionRefusedError",
-                "NetworkDownError"):
+    if name in ("ConnectionError", "ConnectionResetError", "ConnectionRefusedError"):
         return "connect"
-    if name in ("TimeoutError", "socket.timeout"):
+    if name == "TimeoutError":
         return "timeout"
     return "exec"
 

@@ -70,35 +70,98 @@ def test_composite_bare_probe_fail_closed():
 
 # ---------- v2：引号感知切段 / 段首-only / 解释器硬拒 / 路径重渲染 ----------
 
-def test_b1_write_subcommand_physically_absent():
-    """B-1 端到端（合并门槛回归）：把当前 registry 扫一遍渲染 sudoers，
-    断言任何复合二进制的"未登记写子命令"（restart/enable/stop/start/
-    link/vacuum）不出现为放行形态。"""
+def test_b1_write_subcommand_physically_absent(tmp_path, monkeypatch):
+    """B-1/v3 端到端回归门槛：把当前 registry 扫一遍渲染 sudoers（带 bin_paths
+    ——enroll 落盘的真实形态；F-20 教训：断言必须锚定落盘形态本身），
+    断言任何复合二进制的"未登记写子命令/写 flag"不出现为放行形态，裸名
+    复合型行物理不在场。牙口由 test_b1_gate_has_teeth 以缺陷重建锁定。"""
     root = G.default_skills_root()
     if not root:
-        return
+        pytest.skip("无 registry（本机未 hub sync）")
     usage = G.scan_skills_dir(root)
-    text = G.render_sudoers_file(sorted(usage), user="opsaxiom-ro")
-    import re
-    assert not re.search(r"systemctl( (is-active|show|status|--failed) \*)?[, ]"
-                         r"|/usr/bin/systemctl(,|$)", "")  # 占位：真断言在下方
+    assert usage, "registry 扫描出零条目——更新机制坏了？"
+    bin_paths = {b: f"/usr/bin/{b}" for b, _p in usage}
+    text = G.render_sudoers_file(usage, user="opsaxiom-ro",
+                                 bin_paths=bin_paths)
+    text_preview = G.render_sudoers_file(usage, user="opsaxiom-ro")
+    # 复合型二进制（_COMPOSITE_LEAD）+ 已确认写面的基名/flag 黑名单
+    ALLOWED_SUBCMDS = {"is-active", "status", "show", "dmon", "topo", "list"}
+    # 裸名行（len==1）的基名若属复合型/执行器即违规——放行的只允许
+    # "子命令前缀双形态"（bin sub / bin sub *）
+    violations = []
     for line in text.splitlines():
         if line.startswith("#") or "NOPASSWD" not in line:
             continue
-        bins = line.split("NOPASSWD: ", 1)[1]
-        for spec in bins.split(", "):
-            if spec.endswith("/systemctl"):
-                raise AssertionError(f"裸 systemctl 在场（B-1 回归）: {spec}")
-            if spec.endswith("/systemctl *"):
-                raise AssertionError(f"systemctl 全参条目在场（B-1 回归）: {spec}")
+        for spec in line.split("NOPASSWD: ", 1)[1].split(", "):
+            parts = spec.split()
+            if not parts:
+                continue
+            base = parts[0].rsplit("/", 1)[-1]
+            if base in _COMPOSITE_BASES and len(parts) == 1:
+                violations.append(f"复合型裸名行（B-1 本体）: {spec!r}")
+            if len(parts) >= 2 and base in _COMPOSITE_BASES:
+                if parts[1].startswith("-"):
+                    # flag 打头条目：尾通配关不住后续写子命令/写 flag（F-19）
+                    violations.append(f"flag 前缀条目在场: {spec!r}")
+                elif parts[1] not in ALLOWED_SUBCMDS:
+                    violations.append(f"未登记写子命令在场: {spec!r}")
+    assert not violations, "B-1/v3 回归——sudoers 放行形态违规:\n  " + \
+        "\n  ".join(violations)
+    # 预览形态同样不得出现裸名复合行（写入远端前的最后防线）
+    for line in text_preview.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        for spec in line.split("NOPASSWD: ", 1)[1].split(", "):
+            parts = spec.split()
+            assert not (parts and parts[0] in _COMPOSITE_BASES and len(parts) == 1), \
+                f"预览版裸名复合型行在场（写入远端前会带路径遗漏检查）: {spec!r}"
 
 
-def test_flag_prefix_form_allowed():
-    """flag 前缀形态：systemctl --failed / journalctl -u 完整保留（现网探针全走 -u）。"""
+_COMPOSITE_BASES = {"systemctl", "journalctl", "numactl", "timedatectl",
+                    "nvidia-smi", "ip", "networkctl"}
+"""复合型/受限二进制基名：裸名行与未登记 flag/写子命令前缀一律不允许出现。"""
+
+
+def test_b1_gate_has_teeth():
+    """F-20 教训的牙口锁定：把 B-1 缺陷条目（裸 systemctl + flag 前缀条）
+    人为掺进渲染输入，上面的断言体必须炸——无牙测试比没有测试更糟。"""
+    defect = {("df", None), ("systemctl", None),      # B-1 本体：复合型裸名
+              ("systemctl", "--failed"),              # F-19：flag 前缀通配
+              ("numactl", None)}                      # F-23 root shell 执行器
+    bp = {"df": "/usr/bin/df", "systemctl": "/usr/bin/systemctl",
+          "numactl": "/usr/bin/numactl"}
+    text = G.render_sudoers_file(defect, user="opsaxiom-ro", bin_paths=bp)
+    # 逐字复放 test_b1_write_subcommand_physically_absent 的断言核心
+    violations = []
+    for line in text.splitlines():
+        if line.startswith("#") or "NOPASSWD" not in line:
+            continue
+        for spec in line.split("NOPASSWD: ", 1)[1].split(", "):
+            parts = spec.split()
+            if not parts:
+                continue
+            base = parts[0].rsplit("/", 1)[-1]
+            if base in _COMPOSITE_BASES and len(parts) == 1:
+                violations.append(spec)
+            if len(parts) >= 2 and parts[1].startswith("-") and \
+                    base in _COMPOSITE_BASES:
+                violations.append(spec)
+    assert violations, "牙口失效：掺入 B-1 缺陷条目未被断言体拦截（F-20 复发）"
+
+
+def test_flag_prefix_form_fail_closed():
+    """v3（F-19）语义反转：flag 前缀不再是放行形态——flag 与命令词正交
+    （systemd CLI），`--failed *` 这类条目挡不住其后的写子命令/写 flag。
+    flag 探针（systemctl --failed / journalctl -u / --disk-usage）零条目：
+    需日志的服务取证转贴回或 target grant 升 root 档。"""
     e = G.extract_entries("systemctl --failed --type=mount 2>/dev/null | grep -c x")
-    assert ("systemctl", "--failed") in e and ("systemctl", None) not in e
+    assert e == set()                              # flag 前缀 fail-closed（F-19）
     e2 = G.extract_entries("journalctl -u cron --since '-1h'")
-    assert ("journalctl", "-u") in e2
+    assert e2 == set()                             # 同上：-u 是 flag 不可前缀
+    e3 = G.extract_entries("journalctl --disk-usage")
+    assert e3 == set()
+    e4 = G.extract_entries("nvidia-smi --query-gpu=count --format=csv,noheader")
+    assert e4 == set()                             # flag 形态同禁（写 flag 同源）
 
 def test_v2_quoted_pipe_not_split():
     """引号内的 | 是正则交替不是管道——引号内容既不泄漏成"命令"、

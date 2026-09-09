@@ -28,6 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "sim"))
 import repl  # noqa: E402
+import sweep  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -109,14 +110,13 @@ def _mk_inc(monkeypatch, targets):
 
 
 def test_failfast_dead_target_short_circuits_alive_target_pasteback(monkeypatch, capsys):
-    """双目标对抗（Fable P2 + 裁定 3）：
-    web-01 全部探针 connect 级失败 → 死目标：一次性指引，不转贴回；
-    web-02 全部探针 rc 级失败但 err 文本含"连接" → 活目标：必须转贴回
-    （按 err_kind 判，不得因文本误判成连接级而短路丢证据）。"""
+    """双目标对抗（F-21 修复验证）：
+    web-01 全部探针 connect 级失败 → 死目标：一次性指引，不盘问、不转贴回；
+    web-02 rc 级失败（err 文本含"连接"，err_kind=exec）→ 活目标：照常贴回。
+    断言三件套（has() 返 bool，F-20 同款空洞不可再用）：①贴回问答条数=1
+    （死目标不被盘问）②入库 target=web-02 ③web-01 名下无证据。"""
     import incident as I
     inc = _mk_inc(monkeypatch, None)
-    # 两目标各一条探针：手动打 build_plan 不便，直接喂 mixed_sweep 的返回形状——
-    # 用 monkeypatch 替换 incident.mixed_sweep，模拟 execute_mixed 的产物
     fake = {
         "executed": [
             {"node": "c", "cmd": "cat /proc/loadavg", "status": "error",
@@ -126,8 +126,7 @@ def test_failfast_dead_target_short_circuits_alive_target_pasteback(monkeypatch,
         ],
         "manual": {},
     }
-    monkeypatch.setattr(I.Incident, "mixed_sweep",
-                        lambda self, **kw: fake)
+    monkeypatch.setattr(I.Incident, "mixed_sweep", lambda self, **kw: fake)
     monkeypatch.setattr(I.Incident, "plan",
                         lambda self: {"waves": [{"probes": [
                             {"node": "c", "cmd": "cat /proc/loadavg",
@@ -135,16 +134,20 @@ def test_failfast_dead_target_short_circuits_alive_target_pasteback(monkeypatch,
                             {"node": "c", "cmd": "cat /proc/loadavg",
                              "target": "web-02", "auto": False, "index": 1},
                         ]}]})
-    monkeypatch.setattr("builtins.input", lambda *a: "")       # 参数收集等不阻塞
-    # 手动贴回读到 END 即止——喂一条输出 + END
+    monkeypatch.setattr("builtins.input", lambda *a: "")
     import io
     monkeypatch.setattr(sys, "stdin", io.StringIO("load: 0.5\nEND\n"))
+    paste_calls = []
+    monkeypatch.setattr(sweep, "_store_result",
+                        lambda store, p, out, now=None: paste_calls.append((p["target"], p["cmd"])))
     r = repl.Repl()
     r._sweep_remote(inc)
     out = capsys.readouterr().out
     assert "web-01 连不上" in out                    # 死目标一次性指引
-    assert "需手动执行" in out and "web-02" in out    # 活目标照常转贴回
-    assert inc.store.has("cat /proc/loadavg", target="web-02") is not None  # 贴回入了库
+    # ① 死目标不被盘问：贴回 prompt 只出现一次（唯一目标 web-02）
+    assert out.count("请在目标上执行并粘贴输出") == 1, f"盘问次数异常:\n{out}"
+    # ②③ 贴回证据落在活目标名下，死目标零入库
+    assert paste_calls == [("web-02", "cat /proc/loadavg")], paste_calls
 
 
 def test_failfast_rc_level_connect_word_not_short_circuited(monkeypatch, capsys):

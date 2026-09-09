@@ -39,11 +39,29 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-09（第十七轮 Fable 返工批：B-1 sudoers 前缀 + err_kind 结构化 + T 补账）
+- **更新时间**：2026-09-09（十七轮二轮返工：F-19~F-23 全修，白名单 v3 语义）
 - **更新者**：Opus 4.8（工程实现）
-- **阶段**：**Fable 评审"暂缓合并"的返工批已全部执行，813 pytest 全绿（历史首次无既有失败），
-  待 Fable 复核后合并**
-- **十七轮返工交付（对应 REVIEW-QUEUE"十七轮 Fable 返工对账"段）**：
+- **阶段**：**Fable 二轮复核（F-19~F-23）返工批已全部执行，813 passed / 5 skipped
+  全绿，待 Fable 复核**
+- **二轮返工交付（对应 REVIEW-QUEUE"十七轮二轮返工对账"，Fable 复核结论）**：
+  - **F-19（P0）白名单 v3**：flag 前缀条目结构性禁止（flag 与命令词正交，
+    `--failed *` 挡不住 `--failed restart`）。复合型只认只读子命令白名单
+    （_RO_COMPOSITE_SUBCMDS），flag/裸名全部 fail-closed。贴回代价清单
+    已向发起人报备并确认。
+  - **F-23：numactl 等"策略+任意命令"执行器硬拒；sysctl/smartctl/chronyc/
+    coredumpctl/nvidia-smi 裸名写面入黑名单——root shell 口子关闭。
+  - **F-18：-u skip 表删除；_wl_member 消费 extract 产物（精确二段判定，
+    startswith fallback 删除）；对称性测试双向断言。
+  - **F-20 测试牙口**：test_b1 重写（基名+第二段白名单解析，bin_paths+预览
+    双形态）+ test_b1_gate_has_teeth 缺陷重建必炸验证。
+  - **F-21 repl (target, cmd) 二元组定位 + 测试三件套**（盘问次数/入库
+    target/贴回调用清单），恒真断言清除。
+  - **F-22 err_kind 死条目清除 + network 保守口径注记**（docstring + T-5）。
+  - 测试：**813 passed / 5 skipped**（新增牙口锁定与对称性双向断言）。
+- **下一步**：① 真机两档回归（sudoers 形态再变，远端重跑 add + visudo + F-19
+  专属探针 `sudo -n systemctl --failed restart nginx` 应被拒）→ ② Fable 复核
+  → ③ 合并 push。待办（发起人）：#12 opsaxiom update 子命令、#13 气隙离线包。
+- **十七轮一轮返工交付（已被二轮返工覆盖，存档）**：
   - **B-1（P0）sudoers 前缀闸**：enroll 渲染时 (bin,prefix) 被降成裸名 → 复合型
     二进制（systemctl 等）任意子命令 root 可达。修复四件套：gen_sudoers 复合型
     只发"已登记子命令/flag 前缀"条目（`bin p *` + `bin p` 双形态，裸名仅限单用途

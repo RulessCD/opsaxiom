@@ -424,3 +424,33 @@ Fable 评审裁定"暂缓合并"附 3 返工 + 2 P2 补账，已全部执行（�
   root 文件属接受范围），cat/grep 保留不移——白名单的价值在防写不在防读。
 - **P2 未做**：_DENY 写动词补 systemctl/ip 子命令（黑名单补刀，白名单+前缀门后
   收益边际，Fable 认可延后）。
+
+## 十七轮二轮返工对账（Fable 复核 F-19~F-23 后，Opus 执行，待 Fable 复核）
+
+Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全部执行：
+- **F-19（P0，已修，语义升级 v3）**：flag 前缀条目结构性禁止——flag 与命令词
+  正交，`systemctl --failed *` 挡不住 `--failed restart`。复合型二进制只认
+  gen_sudoers._RO_COMPOSITE_SUBCMDS 登记的【只读子命令】作前缀
+  （systemctl is-active/status/show；timedatectl status/show；networkctl
+  status/list；nvidia-smi dmon/topo），flag/裸名/名单外语义全部 fail-closed。
+  代价（发起人确认）：journalctl -u（5 skill）/systemctl --failed（1）/
+  ip neigh（arp-table-full 部分）/nvidia-smi flag 型（~24 条）转贴回或升 root 档。
+- **F-23（P1，已修）**：numactl/taskset/chrt 等"策略+任意命令"执行器并入
+  _INTERPRETERS 硬拒；sysctl/nvidia-smi/smartctl/chronyc/coredumpctl 等裸名
+  写面入 _DENY_BINS（sysctl -w/GPU reset/删核转储不再物理可达）。nvidia-smi
+  归复合型只放行 dmon/topo 纯观察子命令，query 形态 fail-closed。
+- **F-18（P1，已修）**：-u skip 表删除（连带 sudo 变体 skip 一并撤）；_wl_member
+  重写为 (target 精确二段) 判定 + 消费 extract 产物（不再手写镜像），
+  startswith 宽松 fallback 删除；对称性测试双向断言
+  （客户端 True ⟺ sudoers fnmatch 命中）。
+- **F-20（P1，已修）**：test_b1_write_subcommand_physically_absent 重写——按
+  段解析 spec（基名+第二段白名单），渲染带 bin_paths + 预览双形态；新增
+  test_b1_gate_has_teeth 把 B-1 缺陷条目掺回渲染输入验证断言必炸。
+- **F-21（P1，已修）**：repl failed_cmds 键从 cmd 单键改 (target, cmd) 二元组，
+  already 集合循环内收敛（done.add）；测试改三件套（贴回盘问次数=1/入库
+  target=web-02/貼回调用清单精确断言），恒真断言删除。
+- **F-22（P2，已修）**：err_kind 死条目清除（socket.timeout 类名为 timeout、
+  NetworkDownError 无定义者）；network 统一归 exec 的"有意保守"口径写入
+  err_kind docstring 与 docs/07 T-5。
+- 真机回归清单（对应 HANDOFF 待办①）新增一条：`sudo -n systemctl --failed
+  restart nginx` 须被远端拒（F-19 专属探针）。

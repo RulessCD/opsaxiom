@@ -28,13 +28,33 @@ import yaml
 
 # 段切分（引号感知版）：复合命令连接符（管道 + 逻辑符 + 分号）
 _SEG_RE = re.compile(r"&&|\|\||;|\|")
-# 复合型二进制：首个参数是"子命令"且部分子命令带写能力（systemctl restart/
-# ip link set/journalctl --vacuum）。这类**禁止回退裸名**（args 任意 = 写能力
-# 通行，十七轮评审 B-1：远端 physical 闸形同虚设）——只按见到的
-# 子命令/flag 前缀放行，未见前缀的形态 fail-closed（该探针转贴回）。
-# 语义固定单用途的二进制（df/du/lsof/smartctl…）不受此限，裸名无人参问题。
+# 复合型二进制（十七轮返工 v3 语义，F-19）：命令词与 flag 正交（systemd CLI 的
+# "OPTIONS COMMAND" 结构），flag 打头的 sudoers 条目关不死后面的写子命令——
+# `systemctl --failed *` 同时匹配 `systemctl --failed restart nginx`（真机 registry
+# 已登记 --failed 前缀，实测双侧放行写命令）。因此复合型二进制【只认下方
+# _RO_COMPOSITE_SUBCMDS 登记的只读子命令】作前缀；flag/选项前缀一律 fail-closed
+# （不产出条目，该探针白名单档转贴回），复合型也永不发裸名。
 _COMPOSITE_LEAD = {"systemctl", "journalctl", "timedatectl", "networkctl",
+                   "nvidia-smi",
                    "ip", "nft", "iptables", "firewall-cmd"}
+# 复合型二进制的【结构性只读子命令】白名单：这些子命令之后只跟参数，不可能
+# 携带写子命令词；不在名单里的子命令/flag 前缀一律不登记（fail-closed 转贴回——
+# journalctl 的 -u/--disk-usage 是 flag 不是子命令，fnmatch 尾通配关不住
+# --vacuum-size/--rotate 这类销毁证据的写 flag，现网 journalctl 探针因此全部
+# 降级贴回；这是"写侧焊死"的代价，发起人已确认）。
+_RO_COMPOSITE_SUBCMDS = {
+    "systemctl": {"is-active", "status", "show"},
+    "timedatectl": {"status", "show"},
+    "networkctl": {"status", "list"},
+    # nvidia-smi：写动词全走 flag/子命令后参（-r 换卡复位/-pl 功耗/-ac 锁频/
+    # mig -cgi 建 MIG），裸名关不住——按复合型从严，只登纯观察子命令；
+    # nvlink/mig 不放（nvlink -r 重置计数器、mig 可写），flag 前缀（-q/-L/
+    # --query-*）结构性 fail-closed，相关 GPU 探针降级贴回（写侧焊死代价）。
+    "nvidia-smi": {"dmon", "topo"},
+    # journalctl 的常用形态全是 flag（-u/--disk-usage）→ 结构性无前缀可放行；
+    # ip/nft/iptables/firewall-cmd 的 OBJECT 之后可接 flush/add 等写动词，单
+    # token 前缀（ip neigh）关不住 `ip neigh flush` → 全部 fail-closed
+}
 # shell 控制词与重定向段不算白名单内容
 _CTRL = {"for", "if", "then", "else", "fi", "do", "done", "while", "case", "esac",
          "in", "echo", "true", "false", "exit", "return", "export", "set", "cd",
@@ -45,13 +65,28 @@ _CTRL = {"for", "if", "then", "else", "fi", "do", "done", "while", "case", "esac
 # env 直接改环境起进程；socat/nc 是网络管道双刃。
 _INTERPRETERS = {"bash", "sh", "zsh", "ksh", "dash", "awk", "gawk", "mawk",
                  "perl", "python", "python3", "env", "exec", "find", "timeout",
-                 "xargs", "socat", "nc", "ncat", "expect", "lua", "ruby", "php"}
+                 "xargs", "socat", "nc", "ncat", "expect", "lua", "ruby", "php",
+                 # "策略 + 任意命令"执行器（F-23，GTFOBins 同族）：语法即
+                 # "策略参数 + 任意命令"，sudo 下方第一个位置参数之后可起
+                 # root shell——语句上与解释器无异，硬拒，探针转贴回。
+                 "numactl", "taskset", "chrt", "ionice", "nice", "setsid",
+                 "stdbuf", "nohup", "strace", "ltrace", "watch"}
 # 排除名单：客户端 CLI（能执行写 SQL/写命令/服务管理），这类进白名单会让
 # 只读账号获得远超"取证"的能力——它们的只读使用场景走各 connector（mysql 键）
 # 与专用账号，不走 sudoers。
 _DENY_BINS = {"mysql", "mysqldump", "psql", "mongosh", "mongo", "redis-cli",
               "rabbitmqctl", "nginx", "sshd", "curl", "fail2ban-client",
-              "kubectl", "kubectl.x", "auditctl"}
+              "kubectl", "kubectl.x", "auditctl",
+              # 裸名放行 = ro 账号直接可写/可破坏（F-23）："语义固定"不成立的
+              # 伪装者——首参后可下达写动作，fnmatch 裸名条目关不住：
+              #   sysctl -w（写内核参数）/ nvidia-smi -r -pl -ac（GPU reset、
+              #   改功耗锁频）/ smartctl --smart=on -t online（改盘行为、起自检）
+              #   chronyc settime（改时钟）/ coredumpctl delete（删转储）/
+              #   tcpdump -w / ethtool -w。这些的只读使用场景在客户端 _is_readonly
+              #   判定照常，白名单档收不到 sudo 即转贴回。
+              "sysctl", "smartctl", "chronyc", "coredumpctl", "tcpdump",
+              "modprobe", "insmod", "rmmod", "blockdev", "hdparm",
+              "dmidecode"}
 
 
 def split_segments(cmd):
@@ -119,10 +154,10 @@ def extract_entries(cmd):
         return out
     # 前缀 = 二进制后的第一个"有区分度"的 token（仅对复合型二进制有意义）：
     #   - 子命令词（systemctl is-active → "is-active"）
-    #   - flag（systemctl --failed / journalctl --disk-usage / journalctl -u）：
-    #     flag 也能区分形态，取为前缀放行 `bin <flag> *`
-    # 复合型二进制（_COMPOSITE_LEAD）【不登记裸名】——裸名 = 任意参数 = 写子命令
-    # 通行（B-1）；未见前缀（纯 {{...}} 等）时对复合型返回空（fail-closed）。
+    #   - type-1 flag（systemctl --failed / journalctl -u）——v3 起禁用：flag 与
+    #     命令词正交，sudoers 尾通配关不住其后的写子命令/写 flag（F-19），
+    #     故 flag 一律不作为放行前缀（fail-closed，探针转贴回）
+    # 复合型二进制【不登记裸名】；前缀必须在 _RO_COMPOSITE_SUBCMDS 名单内。
     # 非复合型维持 v2 语义：裸名一条（args 任意，语义固定无节制必要）。
     prefix = None
     if name in _COMPOSITE_LEAD:
@@ -135,13 +170,11 @@ def extract_entries(cmd):
             if re.match(r"^\d*>", t):                    # 段尾重定向（2>/dev/null 自身）
                 break
             if t.startswith("-"):
-                prefix = t
-                break
+                break                        # flag 前缀 fail-closed（F-19）：不登记
             if re.match(r"^[A-Za-z][A-Za-z0-9_@.+-]*[A-Za-z0-9_-]$", t) or \
                     re.match(r"^[A-Za-z]$", t):
-                # 模板占位符段（{{...}} 会被渲染）不算固定参数
-                if "{{" not in t:
-                    prefix = t
+                if "{{" not in t and t in _RO_COMPOSITE_SUBCMDS.get(name, set()):
+                    prefix = t               # 只读子命令：唯一可放行的前缀形态
                 break
             break
     if name not in _COMPOSITE_LEAD:
