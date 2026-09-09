@@ -452,5 +452,17 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
 - **F-22（P2，已修）**：err_kind 死条目清除（socket.timeout 类名为 timeout、
   NetworkDownError 无定义者）；network 统一归 exec 的"有意保守"口径写入
   err_kind docstring 与 docs/07 T-5。
+- **F-22（P2，已修）**：err_kind 死条目清除（socket.timeout 类名为 timeout、
+  NetworkDownError 无定义者）；network 统一归 exec 的"有意保守"口径写入
+  err_kind docstring 与 docs/07 T-5。
+- **F-24/F-25/F-27（P2，Fable 二轮，已随手修）**：测试名单改 gen_sudoers 派生
+  （F-24）；对称性近似函数补"裸名条目=任意参数"支路（sudoers(5) 手册语义，
+  F-25）；flock/nsenter/unshare/setpriv/capsh/machinectl 入 _INTERPRETERS
+  防御纵深（F-27）。近似函数教训补入 T-6。
+- **F-26（P2，待发起人裁定）**：现网 sudoers 仍有三个写面裸名条目——mount
+  （root 挂载任意盘）/conntrack（-D 删状态表）/kafka-topics.sh（--create/
+  --delete/--alter 写 Kafka）。自动路径被客户端 _is_readonly 拦住，物理面
+  （持 ro 凭据者直接 sudo -n）开着——超出"读侧全盘"既往裁定范围，下轮二选一：
+  入 _DENY_BINS 收窄（3 个 skill 探针转贴回），或明示接受。
 - 真机回归清单（对应 HANDOFF 待办①）新增一条：`sudo -n systemctl --failed
   restart nginx` 须被远端拒（F-19 专属探针）。

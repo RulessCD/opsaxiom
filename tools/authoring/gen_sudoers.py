@@ -70,7 +70,11 @@ _INTERPRETERS = {"bash", "sh", "zsh", "ksh", "dash", "awk", "gawk", "mawk",
                  # "策略参数 + 任意命令"，sudo 下方第一个位置参数之后可起
                  # root shell——语句上与解释器无异，硬拒，探针转贴回。
                  "numactl", "taskset", "chrt", "ionice", "nice", "setsid",
-                 "stdbuf", "nohup", "strace", "ltrace", "watch"}
+                 "stdbuf", "nohup", "strace", "ltrace", "watch",
+                 # F-27（Fable 补齐，同族防御纵深；现网 registry 未登记——
+                 # 登记前先入拒收名单，避免将来 skill 混入时物理闸开口）
+                 "flock", "nsenter", "unshare", "setpriv", "capsh",
+                 "machinectl"}
 # 排除名单：客户端 CLI（能执行写 SQL/写命令/服务管理），这类进白名单会让
 # 只读账号获得远超"取证"的能力——它们的只读使用场景走各 connector（mysql 键）
 # 与专用账号，不走 sudoers。

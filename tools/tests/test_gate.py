@@ -232,10 +232,21 @@ def test_wl_member_prefix_mirror_matches_sudoers(tmp_path, monkeypatch):
     （客户端 True/远端 False = 死路由；客户端 False/远端 True = 白名单资产
     无谓贴回）任何一边都应转红。"""
     _setup_wl_entries(tmp_path, monkeypatch, [], "systemctl is-active x")
+    # df 形态进样本：向 mini registry 再造一个 df skill（直接追加文件，
+    # 不覆盖前一个——_setup_wl_entries 重复调用会整体重建同名 skill 目录）
+    sk2 = tmp_path / "hub" / "registry" / "skills" / "t.y" / "0.1.0" / "skill.yaml"
+    sk2.parent.mkdir(parents=True, exist_ok=True)
+    sk2.write_text(yaml.safe_dump({
+        "metadata": {"id": "t.y"}, "tree": {"entry": "c", "nodes": [
+            {"id": "c", "type": "check", "run": {"linux": "df -B1 /"}}]}}),
+        encoding="utf-8")
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "tools" / "authoring"))
     import gen_sudoers as G
     import fnmatch
     entries = gate._allow_entries()
     assert ("systemctl", "is-active") in entries
+    assert ("df", None) in entries                 # 裸名支路（F-25）样本就位
     text = G.render_sudoers_file(sorted(entries), user="opsaxiom-ro",
                                  bin_paths={"systemctl": "/usr/bin/systemctl",
                                             "df": "/usr/bin/df"})
@@ -249,12 +260,16 @@ def test_wl_member_prefix_mirror_matches_sudoers(tmp_path, monkeypatch):
 
     def remote_allows(shape):
         """sudoers(5) 语义近似：spec 'bin ARGS' 对命令 bin ARGS 做 fnmatch——
-        尾 `*` 通配剩余整串；无参条目只匹配无参调用。"""
+        尾 `*` 通配剩余整串；裸名条目（无参数部分）放行【任意参数】——
+        sudoers(5) 裸条目即任意 args（F-25：近似函数自身也是镜像，只写
+        手册可考的规则；缺这条支路会对 (bin,None) 条目假报"死路由"）。"""
         first, _, args = shape.partition(" ")
         for s in specs:
             sname, _, sargs = s.partition(" ")
             if sname != first:
                 continue
+            if sargs == "":
+                return True                     # 裸名条目 = 任意参数放行
             if fnmatch.fnmatch(args, sargs):
                 return True
         return False

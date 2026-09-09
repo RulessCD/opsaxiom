@@ -84,8 +84,11 @@ def test_b1_write_subcommand_physically_absent(tmp_path, monkeypatch):
     text = G.render_sudoers_file(usage, user="opsaxiom-ro",
                                  bin_paths=bin_paths)
     text_preview = G.render_sudoers_file(usage, user="opsaxiom-ro")
-    # 复合型二进制（_COMPOSITE_LEAD）+ 已确认写面的基名/flag 黑名单
-    ALLOWED_SUBCMDS = {"is-active", "status", "show", "dmon", "topo", "list"}
+    # 允许出现在 spec 第二段的子命令：按 gen_sudoers 只读子命令名单派生
+    # （T-6：不手抄，F-24。并集兜住全域，实际条目受 extract 约束）
+    ALLOWED_SUBCMDS = set()
+    for _subs in getattr(G, "_RO_COMPOSITE_SUBCMDS", {}).values():
+        ALLOWED_SUBCMDS |= set(_subs)
     # 裸名行（len==1）的基名若属复合型/执行器即违规——放行的只允许
     # "子命令前缀双形态"（bin sub / bin sub *）
     violations = []
@@ -117,8 +120,9 @@ def test_b1_write_subcommand_physically_absent(tmp_path, monkeypatch):
                 f"预览版裸名复合型行在场（写入远端前会带路径遗漏检查）: {spec!r}"
 
 
-_COMPOSITE_BASES = {"systemctl", "journalctl", "numactl", "timedatectl",
-                    "nvidia-smi", "ip", "networkctl"}
+# 复合型/受限二进制基名：从 gen_sudoers 派生（T-6 纪律：测试自身不手抄名单——
+# 手抄必漂移，F-24；numactl 是 _INTERPRETERS 侧的执行器，单独补上）
+_COMPOSITE_BASES = set(G._COMPOSITE_LEAD) | {"numactl"}
 """复合型/受限二进制基名：裸名行与未登记 flag/写子命令前缀一律不允许出现。"""
 
 
