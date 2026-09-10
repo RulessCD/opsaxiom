@@ -39,9 +39,19 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-10（#13 气隙离线包落地：docker 真气隙验证通过；上一轮 #12 update）
+- **更新时间**：2026-09-10（真机白名单档两档回归全过，销项 HANDOFF 待办①；此前 #13 离线包）
 - **更新者**：Opus 4.8（工程实现）
-- **本轮交付（#13 气隙离线包，发起人裁定：只做 linux_x86_64 / 模型默认不打 / 自产自摆渡不放 Release）**：
+- **本轮交付（真机回归，commit 84d219c，REVIEW-QUEUE 末段有完整证据）**：
+  - 高等云肆（223.193.41.38）物理面 + 运行面全过：visudo parsed OK；
+    `sudo -ln` 与 gen_sudoers v3 预期逐条一致（复合型只读子命令双形态、
+    零裸名、零 flag 前缀、journalctl/find/mount 不在场）；
+    **F-19 负探针被拒**（`systemctl --failed restart nginx` → password required），
+    正探针 is-active 放行。
+  - 运行面 revoke→白名单档（4 自动 tier=whitelist/via_sudo=True，2 名单外落
+    manual）；grant→root 档（6/6 全自动 tier=root）——两档分流与审计逐条对账。
+  - 附带观察 2 条⚪记 REVIEW-QUEUE（list 标签"·白名单"在 root 档仍显示；
+    df -B1 一次性 error 未复现）。
+- **上一轮（#13 气隙离线包，发起人裁定：只做 linux_x86_64 / 模型默认不打 / 自产自摆渡不放 Release）**：
   - **pack-offline.sh 新增**：仓库快照 + `vendor/wheels/linux_x86_64/`（pip download
     --platform manylinux2014_x86_64，cp39，23 wheel ≈10M）+ registry 快照（205 Skill）
     + 可选 --with-model（+469MB，默认不打）。产物尾部打印目标机安装操作与
