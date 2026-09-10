@@ -539,3 +539,31 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   macOS → 平台不适用红停。
 - 文档：docs/10 离线安装三步 + 前置自查写入第一章安装表；.gitignore 加
   pack-output/（发布物不进 git）。
+
+## 真机白名单档两档回归（Opus，2026-09-10，高等云肆，全部通过）
+
+对应十七轮返工后的真机回归清单（HANDOFF 待办①），机器 223.193.41.38（Port 32147）。
+
+- **物理面（不动 OpsAxiom，纯远端验证）**：
+  - `visudo -c`：/etc/sudoers.d/opsaxiom-ro parsed OK。
+  - `sudo -ln -U opsaxiom-ro` 实际清单与 gen_sudoers v3 预期逐条一致：
+    systemctl/timedatectl 各只读子命令双形态（`bin p *` + `bin p`）、
+    零复合型裸名、零 flag 前缀条目、journalctl/find/mount 物理不在场。
+  - **F-19 负探针被拒**：`sudo -u opsaxiom-ro sudo -n systemctl --failed
+    restart nginx` → "sudo: a password is required"（无 NOPASSWD 匹配）；
+    journalctl -u / find 同拒；正探针 `systemctl is-active sshd` → active 放行。
+- **运行面（真实 mixed_sweep，六探针同源对账）**：
+  - **白名单档**（target revoke 后真跑）：df×3 + dmesg 4 条自动执行
+    （审计 tier=whitelist / exec_as=opsaxiom-ro / via_sudo=True）；
+    for-find 与 mount 2 条落 manual 桶（sudo_routed 判定=False，转贴回）——
+    名单内自动 / 名单外贴回的分流与设计完全一致。
+  - **root 档**（target grant 后真跑）：6 探针全 executed 零手工，
+    审计 tier=root / exec_as=root / via_sudo=False。
+  - revoke→grant 状态机往返真人操作走通；`target list` 档位标签
+    （未授权·白名单 / 剩 N 天·白名单）与实际档位一致。
+- **附带观察（非阻塞）**：
+  - grant 后 `target list` 的"·白名单"后缀在 root 档仍显示——标签语义是
+    "该机有白名单"（机器属性）非"当前档位"，初看易误读（⚪，可改进文案）。
+  - 一次性观察到 df -B1 探针 error 后自愈（重跑 ok，err 未留痕）——
+    疑似网络瞬断，err_kind 分类路径已在 F-21/裁定3 覆盖，未复现，不立案。
+- **销项**：真机白名单回归清单全部完成（HANDOFF 待办① 可销）。
