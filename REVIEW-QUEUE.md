@@ -517,3 +517,25 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   端到端绿。
 - 设计取舍：更新=本地 git pull（用户面向"更新到最新"），不发明升级协议；
   重装检测按 requirements 哈希（诚实：变没变文件的字节说了算，不猜提交号）。
+
+## #13 气隙离线包落地（Opus，2026-09-10，真机/真气隙验证，待 Fable 复核）
+
+- **pack-offline.sh 新增**（有网机打包）：仓库全量快照（不含 .venv/.git/本地产物）
+  + `vendor/wheels/linux_x86_64/`（pip download --platform manylinux2014_x86_64，
+  cp39，23 wheel ≈10M）+ registry 快照（205 Skill）+ 可选 `--with-model`（默认不打，
+  发起人裁定保持轻量）。产物尾部打印目标机安装操作 + Python ≥3.9 前置自查提示。
+- **install.sh --offline 三处补实**：① Python <3.9 红停（wheels 按 3.9+ 收集，
+  上游停发 3.8 编译 wheel；提示改用 python3.9+）② 非 Linux 红停（包只含
+  linux_x86_64，发起人裁定 2026-09-10 单平台——Mac 开发机在线装）③ registry
+  快照接入改走 `opsaxiom hub init`（原内联 python -c 有 SyntaxError 被吞，
+  真气隙实测暴露后修复）+ 离线模式跳过在线 hub sync。
+- **平台裁定的变更**：最初方案"两平台含 macos_arm64"，验证中发现本机是 Intel
+  Mac（此前口径假设 Apple Silicon），发起人改裁定：**离线包只做 linux_x86_64**
+  （气隙目标机=Linux 服务器），Mac 在线装。
+- **验证闭环（python:3.9-slim 容器，`--network none` 物理断网）**：
+  install_rc=0，依赖全走包内 wheels（Looking in links: vendor/wheels/linux_x86_64），
+  registry 快照就位，doctor 必需项全绿（黄项仅连接器），`hub search disk`
+  离线可查（sim_verified 徽章照常）。红停分支实测：Py3.8 → 版本红停；
+  macOS → 平台不适用红停。
+- 文档：docs/10 离线安装三步 + 前置自查写入第一章安装表；.gitignore 加
+  pack-output/（发布物不进 git）。

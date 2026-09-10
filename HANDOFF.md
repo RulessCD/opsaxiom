@@ -39,20 +39,27 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-09（#12 opsaxiom update 落地：自更新四步时序；上一轮回流点②收官）
+- **更新时间**：2026-09-10（#13 气隙离线包落地：docker 真气隙验证通过；上一轮 #12 update）
 - **更新者**：Opus 4.8（工程实现）
-- **本轮交付（#12 opsaxiom update，发起人补充：菜单挂【3. 配置设置】doctor 之下）**：
-  - **tools/update.py 新增**：四步时序 ① git pull --ff-only（非 git 检出面/
-    未配远程 → 跳过不阻断；真失败红停）② requirements 哈希检测（.venv/deps.sha256
-    落盘对比，变了才 pip 重装；pip 失败🟡不阻断）③ hub sync（离线🟡降级）
-    ④ doctor 收尾（必需项红 → 更新判失败）。
-  - 接线三处：tools/bin/opsaxiom 子命令注册、repl._delegate 分发、
-    _welcome 菜单【3. 配置设置】doctor 下加一行。
-  - 实机验证（本仓库两连跑）：首跑依赖哈希差异→重装→落盘新哈希；二跑
-    "依赖未变化，跳过重装"；全程 doctor 绿，rc=0。
-  - 测试 +12（tools/tests/test_update.py：pull 跳过/失败透传、哈希往返、
-    时序失败即停、pip 失败不阻断、hub 离线降级、真仓库端到端）。
-  - **834 passed / 5 skipped**（全量；墙钟 5h 系 github 不可达网络测试等超时，非用例慢）。
+- **本轮交付（#13 气隙离线包，发起人裁定：只做 linux_x86_64 / 模型默认不打 / 自产自摆渡不放 Release）**：
+  - **pack-offline.sh 新增**：仓库快照 + `vendor/wheels/linux_x86_64/`（pip download
+    --platform manylinux2014_x86_64，cp39，23 wheel ≈10M）+ registry 快照（205 Skill）
+    + 可选 --with-model（+469MB，默认不打）。产物尾部打印目标机安装操作与
+    Python ≥3.9 前置自查（打包机侧提示，发起人要求）。
+  - **install.sh --offline 补实**：Py<3.9 红停 / 非 Linux 红停 / registry 快照接入
+    改走 `opsaxiom hub init`（原内联 python -c 语法错被吞，真气隙实测暴露后修复）；
+    离线模式跳过在线 hub sync。
+  - **真气隙验证（python:3.9-slim 容器 + --network none 物理断网）**：install_rc=0、
+    registry 快照就位、doctor 必需项全绿、`hub search disk` 离线可查；Py3.8 与
+    macOS 红停分支实测。11MB tar（pack-output/ 不进 git）。
+  - 文档：docs/10 安装表加离线行 + 三步操作。pytest 维持 **834 passed / 5 skipped**
+    （#13 是 shell 脚本 + 打包物，验证靠 docker 真气隙 E2E，不加 pytest 用例）。
+- **上一轮（#12 opsaxiom update）交付**：
+  - **tools/update.py**：四步时序 ① git pull --ff-only（非 git/未配远程→跳过不阻断；
+    真失败红停）② requirements 哈希检测（.venv/deps.sha256，变了才 pip 重装；
+    pip 失败🟡不阻断）③ hub sync（离线🟡降级）④ doctor 收尾（必需项红→更新判失败）。
+  - 接线：tools/bin/opsaxiom 注册、repl._delegate 分发、菜单【3. 配置设置】doctor 下。
+  - 实机验证两连跑（首跑重装+落哈希，二跑跳过）；测试 +12。
 - **上一轮（回流点②收官）交付**：
   - **repl._offer_treatment 重写**：可处置假设全部列出让用户选（回车=第 1 项/
     序号/q 跳过），修复原 return-早退只提第一条的静默缺陷。

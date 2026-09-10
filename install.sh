@@ -23,10 +23,17 @@ command -v python3 >/dev/null || { echo "🔴 需要 python3" >&2; exit 1; }
 PYV=$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')
 echo "==> python $PYV"
 
-# Python 版本温馨提示
+# Python 版本检查
 _PY_MAJOR=$(python3 -c 'import sys;print(sys.version_info[0])')
 _PY_MINOR=$(python3 -c 'import sys;print(sys.version_info[1])')
 if [ "$_PY_MAJOR" -lt 3 ] || { [ "$_PY_MAJOR" -eq 3 ] && [ "$_PY_MINOR" -lt 9 ]; }; then
+  if [ "$OFFLINE" -eq 1 ]; then
+    # 包内 wheels 按 Python ≥3.9 收集（上游编译型包已停发 3.8 wheel），3.8 物理装不上
+    echo "🔴 Python $PYV 无法离线安装：离线包内 wheels 按 Python ≥3.9 打包。" >&2
+    echo "   先升级 Python 再执行本命令；系统另有 python3.9+ 时：改用该解释器（如" >&2
+    echo "   python3.9 ./install.sh --offline）或调整 PATH 后重试。" >&2
+    exit 1
+  fi
   echo "🟡 Python $PYV 较旧，部分依赖可能无法安装。建议升级到 3.9+。"
 fi
 
@@ -59,9 +66,24 @@ rm -f "$_VENV_ERR"
 # shellcheck disable=SC1091
 . "$VENV/bin/activate"
 if [ "$OFFLINE" -eq 1 ]; then
-  echo "==> 离线装依赖（vendor/wheels）"
-  pip install --no-index --find-links "$ROOT/vendor/wheels" -r "$ROOT/tools/requirements.txt" \
+  # 离线包只带 linux_x86_64 wheels（发起人裁定 2026-09-10：气隙目标机=Linux 服务器）
+  if [ "$(uname -s)" != "Linux" ]; then
+    echo "🔴 离线包只含 Linux x86_64 的 wheels，本机（$(uname -s)-$(uname -m)）不适用。" >&2
+    echo "   本机请用在线安装：./install.sh" >&2
+    exit 1
+  fi
+  WHEELS="$ROOT/vendor/wheels/linux_x86_64"
+  [ -d "$WHEELS" ] || WHEELS="$ROOT/vendor/wheels"   # 兼容旧布局（单目录）
+  echo "==> 离线装依赖（wheels/linux_x86_64，本机 $(uname -m)）"
+  "$VENV/bin/pip" install --no-index --find-links "$WHEELS" -r "$ROOT/tools/requirements.txt" \
     || echo "🟡 离线依赖不全，核心功能仍可用（缺 cryptography 时 attest 降级 HMAC）"
+  # registry 快照就位（离线包自带 Skill 库；有网安装跳过，走 hub sync）
+  if [ -f "$ROOT/vendor/registry/index.json" ] || [ -f "$ROOT/registry/index.json" ]; then
+    REGSRC="$ROOT/vendor/registry"; [ -f "$ROOT/registry/index.json" ] && REGSRC="$ROOT/registry"
+    "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub init "$REGSRC" >/dev/null 2>&1 \
+      && echo "==> Skill 库快照就位（离线 registry：$REGSRC）" \
+      || echo "🟡 registry 快照接入失败（不阻断；有网后 opsaxiom hub sync 可补）"
+  fi
 else
   echo "==> 在线装依赖"
   pip install --upgrade pip -q || true
@@ -99,10 +121,14 @@ echo "==> 运行 doctor 自检"
 "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" doctor || {
   echo "🔴 doctor 报告必需项未通过，请按上方提示修复。"; exit 1; }
 
-# 6) 同步社区 Skill 库
-echo "==> 同步社区 Skill 库"
-"$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub sync 2>/dev/null || \
-  echo "🟡 网络不可用，Skill 库同步跳过。启动 opsaxiom 后执行 hub sync 即可获取。"
+# 6) 同步社区 Skill 库（离线模式已用包内快照装好，跳过在线同步）
+if [ "$OFFLINE" -eq 1 ] && { [ -f "$ROOT/vendor/registry/index.json" ] || [ -f "$ROOT/registry/index.json" ]; }; then
+  echo "==> Skill 库用离线快照（跳过在线同步）"
+else
+  echo "==> 同步社区 Skill 库"
+  "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub sync 2>/dev/null || \
+    echo "🟡 网络不可用，Skill 库同步跳过。启动 opsaxiom 后执行 hub sync 即可获取。"
+fi
 
 echo
 echo "✅ 安装完成。直接输入 opsaxiom 进入交互态，描述你的问题即可。"

@@ -15,3 +15,5 @@ nouse_需求梳理/
 .claude/
 .agents/
 skills-lock.json
+# 离线包本地产物（发布物不进 git，pack-offline.sh 2026-09-10）
+pack-output/

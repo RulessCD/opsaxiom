@@ -22,15 +22,24 @@
 
 ---
 
-## 第一章 · 装（10 分钟内可用）
-
-三种形态，任选：
-
 | 形态 | 命令 | 适合 |
 |---|---|---|
 | 脚本 | `./install.sh`（内网/有源） | 大多数机器 |
 | 容器 | `docker run -it opsaxiom` | 标准化环境 |
-| 离线 | 解开 `opsaxiom-offline.tar.gz` → `./install.sh --offline` | **气隙内网** |
+| 离线 | 解开 `opsaxiom-offline.tar.gz` → `./install.sh --offline` | **气隙内网**（仅 Linux x86_64，Python ≥3.9） |
+
+**离线包（气隙环境）**：
+
+1. 有网机器上打一次包：`./pack-offline.sh`（可选 `--with-model` 捎带内置小模型，+469MB）
+   → 产出 `pack-output/opsaxiom-offline-<版本>.tar.gz`（仓库快照 + wheels + Skill 库快照）
+2. 摆渡到气隙机器（U 盘/内网文件系统），然后：
+   ```bash
+   tar xzf opsaxiom-offline-<版本>.tar.gz
+   cd stage/opsaxiom
+   ./install.sh --offline     # 依赖走包内 wheels，Skill 库用包内快照，全程不出网
+   ```
+3. 前置自查（目标机）：`python3 --version` 必须 ≥3.9——离线 wheels 按 3.9+ 收集
+   （上游编译型依赖已停发 3.8 wheel），不满足时 install.sh 会红停说明。
 
 装完会自动跑一次 **`opsaxiom doctor`**：
 
