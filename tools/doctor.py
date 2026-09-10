@@ -26,7 +26,7 @@ def _check_import(mod):
         return False
 
 
-def run():
+def run(in_repl=False):
     rows = []          # (level, 名称, 详情)
 
     # --- 必需 ---
@@ -95,10 +95,14 @@ def run():
         print(f"🔴 {reds} 项必需检查未通过——请先修复再使用。")
         return 1
     print(f"🟢 必需项全部通过（{warns} 项推荐/连接器提示，不阻断使用）。")
-    print("下一步：opsaxiom diagnose \"<你的问题>\"  或直接  opsaxiom  进入交互态。")
+    if in_repl:
+        print("自检完成，回到交互态继续（直接说你的问题，或  update/overlay/model 等配置命令）。",
+              file=sys.stdout)
+    else:
+        print("下一步：直接输入 opsaxiom 进入交互态，描述你的问题即可。")
     return 0
 
 
-def add_doctor(subparsers):
+def add_doctor(subparsers, in_repl=False):
     p = subparsers.add_parser("doctor", help="部署后自检（红黄绿）")
-    p.set_defaults(fn=lambda args: run())
+    p.set_defaults(fn=lambda args: run(in_repl=in_repl))

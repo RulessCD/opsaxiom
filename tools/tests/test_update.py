@@ -78,7 +78,7 @@ def test_order_and_deps_skip(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(U.hubtool, "hub_sync", lambda: calls.append("hub") or 0)
     monkeypatch.setattr(
         U.doctor, "run",
-        lambda: (calls.append("doctor"), 0)[1])
+        lambda *a, **kw: (calls.append("doctor"), 0)[1])
     rc = U.run(root=tmp_path)
     assert calls == ["git", "deps" if False else "git"] or True  # deps_changed 被调用即算
     assert calls.count("doctor") == 1
@@ -91,7 +91,7 @@ def test_deps_changed_triggers_pip(monkeypatch, tmp_path, capsys):
     ran = []
     monkeypatch.setattr(U, "_pip_install", lambda root: (ran.append(True), True)[1])
     monkeypatch.setattr(U.hubtool, "hub_sync", lambda: 0)
-    monkeypatch.setattr(U.doctor, "run", lambda: 0)
+    monkeypatch.setattr(U.doctor, "run", lambda *a, **kw: 0)
     rc = U.run(root=tmp_path)
     assert ran == [True]
     assert "依赖有更新" in capsys.readouterr().out
@@ -107,7 +107,7 @@ def test_pip_failure_does_not_block(monkeypatch, tmp_path, capsys):
         U.subprocess, "run",
         lambda *a, **k: subprocess.CompletedProcess([], 1, "", "ERROR: x"))
     monkeypatch.setattr(U.hubtool, "hub_sync", lambda: 3)
-    monkeypatch.setattr(U.doctor, "run", lambda: 0)
+    monkeypatch.setattr(U.doctor, "run", lambda *a, **kw: 0)
     rc = U.run(root=tmp_path)
     out = capsys.readouterr().out
     assert "依赖重装未完成" in out
@@ -124,7 +124,7 @@ def test_hub_sync_offline_degrades(monkeypatch, tmp_path, capsys):
     def boom():
         raise RuntimeError("unable to access")
     monkeypatch.setattr(U.hubtool, "hub_sync", boom)
-    monkeypatch.setattr(U.doctor, "run", lambda: 0)
+    monkeypatch.setattr(U.doctor, "run", lambda *a, **kw: 0)
     rc = U.run(root=tmp_path)
     out = capsys.readouterr().out
     assert "Skill 库同步跳过" in out

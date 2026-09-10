@@ -94,7 +94,7 @@ def _pip_install(root):
     return False
 
 
-def run(root=ROOT):
+def run(root=ROOT, in_repl=False):
     print("==> OpsAxiom 自更新")
     rc, detail = _git_pull(root)
     if rc != 0:
@@ -116,9 +116,9 @@ def run(root=ROOT):
         print(f"  🟡 Skill 库同步跳过（{e}）——恢复网络后可执行 opsaxiom hub sync")
 
     print("==> doctor 自检")
-    return doctor.run()
+    return doctor.run(in_repl=in_repl)
 
 
-def add_update(subparsers):
+def add_update(subparsers, in_repl=False):
     p = subparsers.add_parser("update", help="自更新：代码→依赖→Skill 库→自检")
-    p.set_defaults(fn=lambda args: run())
+    p.set_defaults(fn=lambda args: run(in_repl=in_repl))

@@ -1186,6 +1186,10 @@ class Repl:
                         ("target_cli", "add_target"), ("update", "add_update")):
             try:
                 m = __import__(mod)
+                # REPL 内自检的收尾语按场景分岔（doctor/update 收到 in_repl 才换话术）
+                if mod in ("doctor", "update"):
+                    getattr(m, fn)(sub, in_repl=True)
+                    continue
                 getattr(m, fn)(sub)
             except Exception:
                 pass
