@@ -28,13 +28,22 @@ _PY_MAJOR=$(python3 -c 'import sys;print(sys.version_info[0])')
 _PY_MINOR=$(python3 -c 'import sys;print(sys.version_info[1])')
 if [ "$_PY_MAJOR" -lt 3 ] || { [ "$_PY_MAJOR" -eq 3 ] && [ "$_PY_MINOR" -lt 9 ]; }; then
   if [ "$OFFLINE" -eq 1 ]; then
-    # 包内 wheels 按 Python ≥3.9 收集（上游编译型包已停发 3.8 wheel），3.8 物理装不上
-    echo "🔴 Python $PYV 无法离线安装：离线包内 wheels 按 Python ≥3.9 打包。" >&2
-    echo "   先升级 Python 再执行本命令；系统另有 python3.9+ 时：改用该解释器（如" >&2
-    echo "   python3.9 ./install.sh --offline）或调整 PATH 后重试。" >&2
+    # 包内 wheels 按 Python 3.9~3.12 收集（pyyaml/cffi/rpds 编译型按版本各备一份；
+    # 3.8 上游停发编译 wheel 物理装不上），超下界红停。
+    echo "🔴 Python $PYV 无法离线安装：包内 wheels 按 Python 3.9~3.12 打包。" >&2
+    echo "   换用 3.9~3.12 的解释器后再执行本命令——注意 install.sh 是 bash 脚本，" >&2
+    echo "   不能 'python3.x ./install.sh'，要把该解释器的 bin 前置 PATH，例如：" >&2
+    echo "   PATH=/usr/local/python312/bin:\$PATH ./install.sh --offline" >&2
     exit 1
   fi
   echo "🟡 Python $PYV 较旧，部分依赖可能无法安装。建议升级到 3.9+。"
+elif [ "$OFFLINE" -eq 1 ] && [ "$_PY_MINOR" -gt 12 ]; then
+  # 包内按 3.9~3.12 收集（pyyaml/cffi/rpds 编译型按版本各备一份；≥3.13 未收不承诺），超界红停
+  echo "🔴 Python $PYV 无法离线安装：包内 wheels 按 Python 3.9~3.12 打包。" >&2
+  echo "   换用 3.9~3.12 的解释器后再执行本命令——注意 install.sh 是 bash 脚本，" >&2
+  echo "   不能 'python3.x ./install.sh'，要把该解释器的 bin 前置 PATH，例如：" >&2
+  echo "   PATH=/usr/local/python312/bin:\$PATH ./install.sh --offline" >&2
+  exit 1
 fi
 
 # macOS: 检测 Command Line Tools 是否安装（/usr/bin/python3 占位桩拦截）
@@ -77,12 +86,27 @@ if [ "$OFFLINE" -eq 1 ]; then
   echo "==> 离线装依赖（wheels/linux_x86_64，本机 $(uname -m)）"
   "$VENV/bin/pip" install --no-index --find-links "$WHEELS" -r "$ROOT/tools/requirements.txt" \
     || echo "🟡 离线依赖不全，核心功能仍可用（缺 cryptography 时 attest 降级 HMAC）"
-  # registry 快照就位（离线包自带 Skill 库；有网安装跳过，走 hub sync）
+  # registry 快照就位（离线包自带 Skill 库；有网安装跳过，走 hub sync）。
+  # 红线（Fable 复核 🔴1）：必须【实体复制】到 $OPS_HOME/hub/registry——
+  # hub init 对本地目录只写 config 指针，而运行时（REPL 症状匹配/list）只认
+  # hub/registry 目录；指针在气隙下 hub sync 也自救不了（包目录可能被移走）。
   if [ -f "$ROOT/vendor/registry/index.json" ] || [ -f "$ROOT/registry/index.json" ]; then
     REGSRC="$ROOT/vendor/registry"; [ -f "$ROOT/registry/index.json" ] && REGSRC="$ROOT/registry"
-    "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub init "$REGSRC" >/dev/null 2>&1 \
-      && echo "==> Skill 库快照就位（离线 registry：$REGSRC）" \
-      || echo "🟡 registry 快照接入失败（不阻断；有网后 opsaxiom hub sync 可补）"
+    OPS_HOME="${OPSAXIOM_HOME:-$HOME/.opsaxiom}"
+    rm -rf "$OPS_HOME/hub/registry"
+    mkdir -p "$OPS_HOME/hub"
+    cp -R "$REGSRC" "$OPS_HOME/hub/registry" \
+      && echo "==> Skill 库快照就位（$(ls "$OPS_HOME/hub/registry/skills" 2>/dev/null | wc -l | tr -d ' ') 个 Skill → ${OPS_HOME}/hub/registry）" \
+      || echo "🟡 registry 快照复制失败（不阻断；有网后 opsaxiom hub sync 可补）"
+    # config 指针同步（hub search/pull 等命令按 config 找 registry 源）
+    "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub init "$REGSRC" >/dev/null 2>&1 || true
+  fi
+  # 内置小模型接线（--with-model 打的包）——cp 到运行时消费的 $OPS_HOME/models/，
+  # model use builtin 直接可用（llm.builtin_model_path 的默认查找路径）
+  if [ -d "$ROOT/vendor/model" ] && ls "$ROOT"/vendor/model/*.gguf >/dev/null 2>&1; then
+    mkdir -p "$OPS_HOME/models"
+    cp -f "$ROOT"/vendor/model/*.gguf "$OPS_HOME/models/" \
+      && echo "==> 内置小模型就位（${OPS_HOME}/models/，opsaxiom model use builtin 启用）"
   fi
 else
   echo "==> 在线装依赖"

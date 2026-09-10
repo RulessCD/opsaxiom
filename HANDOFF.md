@@ -39,9 +39,24 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
 
 ## 当前状态（由最后工作的模型更新）
 
-- **更新时间**：2026-09-10（真机白名单档两档回归全过，销项 HANDOFF 待办①；此前 #13 离线包）
+- **更新时间**：2026-09-10（Fable 评审三批复核完成：#13 打回项全部返工实测，#12 小返工落地）
 - **更新者**：Opus 4.8（工程实现）
-- **本轮交付（真机回归，commit 84d219c，REVIEW-QUEUE 末段有完整证据）**：
+- **本轮交付（评审返工批，REVIEW-QUEUE"Fable 评审三批复核"段有完整证据）**：
+  - **🔴 registry 实体复制**：install.sh --offline 把 vendor/registry cp 到
+    $OPS_HOME/hub/registry（运行时唯一技能源；原 hub init 只写指针 → 装完 REPL
+    主路径无 Skill，Fable 打回主因）。气隙 E2E 升级断言：装完 diagnose 出候选/list
+    非零——python:3.10 与 3.12 容器（--network none）实测全过。
+  - **🔴 Py 口径 3.9~3.12**（发起人裁定"多版本收 wheel"）：pack-offline.sh 按四
+    版本各收编译型 wheel（42 wheel 25MB，纯 py/abi3 pip 自动跳过已下载）；
+    install.sh <3.9 / ≥3.13 红停（3.8/3.13 容器实测）；三处文档口径一致。
+    错误救命提示修正（原 `python3.9 ./install.sh` 是 bash 误用 → PATH 前置写法）。
+  - **🟡 #12 三件**：恒真断言重写为真时序断言（+pip 支路）；hub_sync 弃 check=False
+    静默失败，真失败 raise → update 🟡 降级；git pull 网络类报错降级继续、
+    真失败仍红停（气隙机 update 与离线包不再打架）。--with-model 接线到
+    $OPS_HOME/models。docs/10 第一章标题回补。
+  - **⚠ T-2 计数修正**：回流点②实际 822/+6（原写 818/+4 系照抄未重跑）；本轮
+    全量实跑 **838 passed / 5 skipped**。
+- **上上一轮（真机回归，commit 84d219c）**：
   - 高等云肆（223.193.41.38）物理面 + 运行面全过：visudo parsed OK；
     `sudo -ln` 与 gen_sudoers v3 预期逐条一致（复合型只读子命令双形态、
     零裸名、零 flag 前缀、journalctl/find/mount 不在场）；
@@ -49,21 +64,13 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
     正探针 is-active 放行。
   - 运行面 revoke→白名单档（4 自动 tier=whitelist/via_sudo=True，2 名单外落
     manual）；grant→root 档（6/6 全自动 tier=root）——两档分流与审计逐条对账。
-  - 附带观察 2 条⚪记 REVIEW-QUEUE（list 标签"·白名单"在 root 档仍显示；
-    df -B1 一次性 error 未复现）。
-- **上一轮（#13 气隙离线包，发起人裁定：只做 linux_x86_64 / 模型默认不打 / 自产自摆渡不放 Release）**：
-  - **pack-offline.sh 新增**：仓库快照 + `vendor/wheels/linux_x86_64/`（pip download
-    --platform manylinux2014_x86_64，cp39，23 wheel ≈10M）+ registry 快照（205 Skill）
-    + 可选 --with-model（+469MB，默认不打）。产物尾部打印目标机安装操作与
-    Python ≥3.9 前置自查（打包机侧提示，发起人要求）。
-  - **install.sh --offline 补实**：Py<3.9 红停 / 非 Linux 红停 / registry 快照接入
-    改走 `opsaxiom hub init`（原内联 python -c 语法错被吞，真气隙实测暴露后修复）；
-    离线模式跳过在线 hub sync。
-  - **真气隙验证（python:3.9-slim 容器 + --network none 物理断网）**：install_rc=0、
-    registry 快照就位、doctor 必需项全绿、`hub search disk` 离线可查；Py3.8 与
-    macOS 红停分支实测。11MB tar（pack-output/ 不进 git）。
-  - 文档：docs/10 安装表加离线行 + 三步操作。pytest 维持 **834 passed / 5 skipped**
-    （#13 是 shell 脚本 + 打包物，验证靠 docker 真气隙 E2E，不加 pytest 用例）。
+- **更早（#13 一轮 + #12，存档；#13 已在本轮返工，见顶部）**：
+  - **pack-offline.sh 新增**：仓库快照 + vendor/wheels + registry 快照
+    + 可选 --with-model（+469MB，默认不打）。尾部打印目标机安装操作与
+    Python 前置自查（打包机侧提示，发起人要求）。
+  - **install.sh --offline 补实**：非 Linux 红停；离线模式跳过在线 hub sync。
+  - 首轮真气隙验证（python:3.9-slim 容器 + --network none）过，但验证面止于
+    hub CLI/doctor——REPL 主路径缺口由 Fable 评审指出，本轮返工补实。
 - **上一轮（#12 opsaxiom update）交付**：
   - **tools/update.py**：四步时序 ① git pull --ff-only（非 git/未配远程→跳过不阻断；
     真失败红停）② requirements 哈希检测（.venv/deps.sha256，变了才 pip 重装；

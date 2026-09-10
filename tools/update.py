@@ -18,8 +18,6 @@ sys.path.insert(0, str(HERE))
 import doctor   # noqa: E402
 import hubtool  # noqa: E402
 
-DEPS_HASH_REL = pathlib.PurePosixPath(".venv") / "deps.sha256"
-
 
 def _last_line(s):
     lines = [ln for ln in (s or "").strip().splitlines() if ln.strip()]
@@ -27,7 +25,10 @@ def _last_line(s):
 
 
 def _git_pull(root):
-    """返回 (rc, 一行详情)。rc==0 继续（含跳过支路），!=0 红停。"""
+    """返回 (rc, 一行详情)。rc==0 继续（含跳过支路），!=0 红停。
+    网络不可达（Could not resolve/timeout/unable to access）→ rc=0 降级继续
+    （气隙兜底面：代码更新不成，后续 hub sync/doctor 照走）；git 真失败
+    （冲突/脏树）才红停。"""
     if not (pathlib.Path(root) / ".git").exists():
         return 0, "（非 git 检出面：跳过代码更新）"
     try:
@@ -35,7 +36,8 @@ def _git_pull(root):
             ["git", "-C", str(root), "pull", "--ff-only"],
             capture_output=True, text=True, timeout=120)
     except Exception as e:
-        return 1, str(e)
+        # 拉不起代码多半是网络问题——降级继续，不红停（第②③④步照走）
+        return 0, f"（git 不可用：跳过代码更新——{_last_line(str(e)) or type(e).__name__}）"
     if r.returncode == 0:
         detail = _last_line(r.stdout)
         if "already up to date" in detail.lower() or "up to date" in detail.lower():
@@ -47,6 +49,11 @@ def _git_pull(root):
     if "no tracking information" in low or "no remote repository" in low \
        or "does not appear to be a git repository" in low:
         return 0, "（未配置远程：跳过代码更新）"
+    # 网络不可达 → 🟡 降级继续（与 hub sync 的离线降级同档），不红停
+    if "could not resolve host" in low or "connection timed out" in low \
+       or "could not read from remote repository" in low \
+       or "unable to access" in low:
+        return 0, "（网络不可达：跳过代码更新）"
     return r.returncode, _last_line(err) or "git pull 失败"
 
 

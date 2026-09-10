@@ -72,16 +72,30 @@ def test_git_failure_stops_before_hub_sync(monkeypatch, tmp_path, capsys):
 
 
 def test_order_and_deps_skip(monkeypatch, tmp_path, capsys):
+    """四步时序真断言（修复原恒真断言）：git → (deps 跳过) → hub → doctor。"""
     calls = []
     monkeypatch.setattr(U, "_git_pull", lambda root: (calls.append("git"), (0, "已是最新"))[1])
-    monkeypatch.setattr(U, "deps_changed", lambda root: False)
+    monkeypatch.setattr(U, "deps_changed", lambda root: calls.append("deps") or False)
     monkeypatch.setattr(U.hubtool, "hub_sync", lambda: calls.append("hub") or 0)
     monkeypatch.setattr(
         U.doctor, "run",
         lambda *a, **kw: (calls.append("doctor"), 0)[1])
     rc = U.run(root=tmp_path)
-    assert calls == ["git", "deps" if False else "git"] or True  # deps_changed 被调用即算
-    assert calls.count("doctor") == 1
+    assert calls == ["git", "deps", "hub", "doctor"]
+    assert rc == 0
+
+
+def test_order_with_deps_pip(monkeypatch, tmp_path, capsys):
+    """deps 有变化支路的时序：git → pip 重装 → hub → doctor。
+    （deps_changed 在 run 内被直接调用非 mock 链，故不记 calls。）"""
+    calls = []
+    monkeypatch.setattr(U, "_git_pull", lambda root: (calls.append("git"), (0, ""))[1])
+    monkeypatch.setattr(U, "deps_changed", lambda root: True)
+    monkeypatch.setattr(U, "_pip_install", lambda root: (calls.append("pip"), True)[1])
+    monkeypatch.setattr(U.hubtool, "hub_sync", lambda: calls.append("hub") or 0)
+    monkeypatch.setattr(U.doctor, "run", lambda *a, **kw: (calls.append("doctor"), 0)[1])
+    rc = U.run(root=tmp_path)
+    assert calls == ["git", "pip", "hub", "doctor"]
     assert rc == 0
 
 
@@ -129,6 +143,38 @@ def test_hub_sync_offline_degrades(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Skill 库同步跳过" in out
     assert rc == 0
+
+
+def test_git_pull_network_unreachable_degrades(monkeypatch, tmp_path, capsys):
+    """断网真报错（Could not resolve host）→ 🟡 降级 rc=0 继续后续步骤，不红停。"""
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(
+        U.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            [], 128, "", "fatal: Could not resolve host github.com"))
+    rc, detail = U._git_pull(tmp_path)
+    assert rc == 0
+    assert "网络不可达" in detail
+
+
+def test_git_pull_timeout_exception_degrades(monkeypatch, tmp_path):
+    """git 进程异常（如超时）→ 降级 rc=0，不红停。"""
+    (tmp_path / ".git").mkdir()
+    def slow(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=120)
+    monkeypatch.setattr(U.subprocess, "run", slow)
+    rc, detail = U._git_pull(tmp_path)
+    assert rc == 0 and "跳过" in detail
+
+
+def test_git_pull_conflict_still_red(monkeypatch, tmp_path):
+    """真 git 失败（conflict 等非网络错误）仍红停——降级只限网络类。"""
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(
+        U.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess([], 1, "", "fatal: conflict"))
+    rc, detail = U._git_pull(tmp_path)
+    assert rc != 0
 
 
 # ---------- 端到端（真 git 仓库，全程不出网）----------

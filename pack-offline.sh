@@ -6,7 +6,7 @@
 #   ./pack-offline.sh --out /tmp/pkgs      # 产物目录（默认 ./pack-output）
 #
 # 产物：仓库全量快照（不含 .venv/.git）+ wheels/linux_x86_64/ + registry 快照 + model/（可选）
-# 气隙侧：tar xzf → ./install.sh --offline（仅适用 Linux x86_64，Python ≥3.9）
+# 气隙侧：tar xzf → ./install.sh --offline（仅适用 Linux x86_64，Python 3.9~3.12）
 #
 # 产物不进 git（属于发布物，发起人裁定 2026-09-10：本地自产自摆渡，不放 Release）；
 # 脚本与文档进 git。
@@ -28,14 +28,20 @@ done
 
 # 平台集（发起人裁定 2026-09-10：只做 linux_x86_64——气隙目标机是 Linux 服务器；
 # Mac 开发机在线装即可，不进离线包。win64 不做。）
-# 统一按 cp39 收集：abi3/纯 py wheel 通用；编译型 wheel 由 pip download
-# 按 --platform/--python-version 选对应二进制。目标机 Python ≥3.9。
+# Python 版本集（Fable 评审返工 + 发起人裁定 2026-09-10"多版本收 wheel"）：
+#   abi3/纯 py wheel 天然通用；严格 ABI 的编译型 wheel（pyyaml/cffi/rpds-py，
+#   实测仅此 3 个）按 3.9/3.10/3.11/3.12 各收一份，pip 安装时按目标机版本自动选。
+#   支持口径 = 3.9~3.12：3.13 上游生态未稳且气隙机几乎不预装，不收不承诺；
+#   3.8 及以下编译 wheel 上游停发，红停。各版本独立跑 pip download（cffi 在
+#   cp39/cp310+ 解析出的版本不同，不能只换标签复用一份）。
 PLATFORMS="linux_x86_64"
+PYVERS="3.9 3.10 3.11 3.12"
 [ -n "${ONLY:-}" ] && PLATFORMS="$ONLY"
 
 args_for() {
+  # $1=平台 $2=python 版本 → pip download 平台参数
   case "$1" in
-    linux_x86_64) echo "--python-version 3.9 --platform manylinux2014_x86_64 --implementation cp" ;;
+    linux_x86_64) echo "--python-version $2 --platform manylinux2014_x86_64 --implementation cp" ;;
     *) echo "未知平台：$1（可选 linux_x86_64）" >&2; return 1 ;;
   esac
 }
@@ -67,15 +73,20 @@ tar -C "$ROOT" \
 echo "==> 仓库快照就位（不含 .git/.venv）"
 
 for PLAT in $PLATFORMS; do
-  echo "==> [${PLAT}] 下载 wheels"
+  echo "==> [${PLAT}] 下载 wheels（Python ${PYVERS}）"
   WDIR="${PKGDIR}/opsaxiom/vendor/wheels/${PLAT}"
   mkdir -p "$WDIR"
-  PLAT_ARGS="$(args_for "$PLAT")"
-  # shellcheck disable=SC2086
-  python3 -m pip download -r "${ROOT}/tools/requirements.txt" \
-    -d "$WDIR" --only-binary=:all: $PLAT_ARGS \
-    || { echo "🔴 wheel 下载失败：${PLAT}" >&2; exit 1; }
-  echo "==> [${PLAT}] $(ls "$WDIR" | wc -l | tr -d ' ') 个 wheel，$(du -sh "$WDIR" | cut -f1)"
+  for PV in $PYVERS; do
+    PLAT_ARGS="$(args_for "$PLAT" "$PV")"
+    # shellcheck disable=SC2086
+    python3 -m pip download -r "${ROOT}/tools/requirements.txt" \
+      -d "$WDIR" --only-binary=:all: $PLAT_ARGS 2>&1 | \
+      { grep -iv "File was already downloaded" || true; } \
+      || { echo "🔴 wheel 下载失败：${PLAT} py${PV}" >&2; exit 1; }
+  done
+  # 同名 wheel（纯 py/abi3 各版本重复下载）pip 自动跳过（File was already
+  # downloaded）；严格 ABI 的编译 wheel 每版本文件名不同，天然共存。
+  echo "==> [${PLAT}] $(ls "$WDIR" | wc -l | tr -d ' ') 个 wheel（${PYVERS}），$(du -sh "$WDIR" | cut -f1)"
 done
 
 # ---- 模型（可选，默认不打——发起人裁定，离线包保持轻量）----
@@ -116,6 +127,7 @@ echo "   · 仅适用 Linux x86_64 目标机（其他平台请在线安装）"
 echo "   · 装完 doctor 全绿即可用；Skill 库用包内快照，无须网络"
 echo
 echo "── ⚠ Python 版本前置（目标机，安装前自查）──────────"
-echo "   离线 wheels 按 Python ≥3.9 收集，执行 install.sh --offline 的机器必须"
-echo "   满足 python3 ≥ 3.9。检查：python3 --version"
-echo "   不足时先升级 Python（或用系统的 python3.9+）再装。"
+echo "   离线 wheels 按 Python 3.9~3.12 收集（pyyaml/cffi/rpds 等编译型按版本"
+echo "   各备一份，安装时 pip 自动选）。检查：python3 --version"
+echo "   <3.9 或 ≥3.13 先升级/改用对应解释器再装（python3.12 ./install.sh 无效，"
+echo "   需将其 bin 目录前置 PATH，例：PATH=/usr/local/py312/bin:\$PATH ./install.sh）"

@@ -567,3 +567,48 @@ Fable 复核 17-RW（commit 0496d02）裁定"暂缓合并"，5 项返工已全�
   - 一次性观察到 df -B1 探针 error 后自愈（重跑 ok，err 未留痕）——
     疑似网络瞬断，err_kind 分类路径已在 F-21/裁定3 覆盖，未复现，不立案。
 - **销项**：真机白名单回归清单全部完成（HANDOFF 待办① 可销）。
+
+## Fable 评审三批复核（Opus，2026-09-10，#13 打回返工 + #12 返工）
+
+Fable 对抗评审结论：回流点②与 #12 可定案（带小返工），#13 打回——离线装完后
+REPL 主路径（症状匹配）无 Skill 可用。以下按返工点逐条落地，全部实测验证。
+
+**🔴1 registry 实体复制（#13 核心）**：install.sh --offline 弃"hub init 只写指针"，
+改为把 vendor/registry **cp -R 到 $OPS_HOME/hub/registry**（运行时唯一技能源），
+config 指针同步走 hub init（供 hub search/pull 用）。气隙 E2E 升级断言：
+装完 `hub/registry/skills`=205 个、`opsaxiom diagnose "磁盘满了"` 出候选、
+`opsaxiom list host` 非零——3.10 与 3.12 两个容器实测全过。
+
+**🔴2 Py 版本口径落地为 3.9~3.12（发起人裁定"多版本收 wheel"）**：pack-offline.sh
+按 PYVERS="3.9 3.10 3.11 3.12" 各跑一遍 pip download（cffi 在 cp39/cp310+ 解析
+出版本不同，不能复用单份），纯 py/abi3 wheel pip 自动跳过已下载的（实测 42 个
+wheel 并存一桶，25MB）。install.sh 红停口径同步：<3.9 或 ≥3.13 红停（3.8 与
+3.13 容器实测红停文案）；docs/10、pack-offline.sh 尾部提示三处口径一致改
+"3.9~3.12"。错误救命提示同时修正：`python3.x ./install.sh` 是错的（bash 脚本），
+改为 PATH 前置写法。
+
+**🟡3 --with-model 接线**：install.sh --offline 把 vendor/model/*.gguf cp 到
+$OPS_HOME/models/（llm.builtin_model_path 默认查找路径），model use builtin 即用。
+
+**🟡8 docs/10 第一章标题回补**（#c1bbee6 误删，章序列恢复）。
+
+**🟡3 恒真断言重写**：test_order_and_deps_skip 原为 `X or True` 恒真且自我剥除
+时序——重写为 `calls == ["git","deps","hub","doctor"]` 全序断言 + 新增
+test_order_with_deps_pip（pip 支路 `["git","pip","hub","doctor"]`）。
+
+**🟡4 hub sync 失败诚实化**：hubtool.hub_sync 弃 check=False 静默吞失败——
+git pull rc!=0 或网络不可达关键词 → raise RuntimeError，update 侧 🟡 降级文案
+（此前断网也报"已同步 205 个"）。测试：假 registry + 失败 rc → must raise。
+
+**🟡5 git pull 网络失败降级档**：update._git_pull 加网络类报错分支
+（Could not resolve host / Connection timed out / unable to access / 进程异常）
+→ rc=0 "（网络不可达：跳过代码更新）"继续后续步骤；conflict 等真失败仍红停。
+与 #13 的同机场景不再打架。测试 3 条（网络降级/超时异常降级/conflict 红停）。
+
+**⚪⚠7 测试计数修正（T-2 纪律）**：回流点②实际 822/+6（原写 818/+4 为照抄
+未重跑）。本轮全量实跑 **838 passed / 5 skipped**（834 + update 新增 5 - 占位 1）。
+
+**未采纳**：Fable ⚪"macOS 平台红停上提两行"——维持现状（'平台检查放 venv 创建
+后属代码组织 问题，红停文案已明确'，改动收益小于回归成本），待后续轮顺手。
+**打包实测**：42 wheel 24M / tar 25M（原 23 wheel 11M）；3.10/3.12 气隙容器
+install_rc=0 + hub/registry=205 + diagnose 出候选 + doctor 绿；3.8/3.13 红停。

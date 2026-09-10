@@ -133,10 +133,21 @@ def _index():
 
 
 def hub_sync():
-    """git registry → git pull；本地目录 → 无操作。返回条目数。"""
+    """git registry → git pull；本地目录 → 无操作。
+    返回条目数；git pull 真失败（网络断等）抛 RuntimeError——调用方决定降级文案。
+    （诚实修复：原先 check=False 静默吞掉 pull 失败仍报"已同步"。）"""
     reg = _registry()
     if (reg / ".git").exists():
-        subprocess.run(["git", "-C", str(reg), "pull", "--ff-only"], check=False)
+        r = subprocess.run(["git", "-C", str(reg), "pull", "--ff-only"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(
+                (r.stderr or r.stdout or "").strip().splitlines()[-1][:120]
+                if (r.stderr or r.stdout or "").strip() else f"git pull rc={r.returncode}")
+        low = ((r.stdout or "") + (r.stderr or "")).lower()
+        if "could not resolve host" in low or "connection timed out" in low \
+                or "unable to access" in low:
+            raise RuntimeError("network unreachable")
     return len(_index())
 
 
