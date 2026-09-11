@@ -598,7 +598,8 @@ test_order_with_deps_pip（pip 支路 `["git","pip","hub","doctor"]`）。
 
 **🟡4 hub sync 失败诚实化**：hubtool.hub_sync 弃 check=False 静默吞失败——
 git pull rc!=0 或网络不可达关键词 → raise RuntimeError，update 侧 🟡 降级文案
-（此前断网也报"已同步 205 个"）。测试：假 registry + 失败 rc → must raise。
+（此前断网也报"已同步 205 个"）。hub_sync raise 行为实测验证（六轮回归直击），
+未加假-registry 单测；hub_cli sync 分支已补 try/except（复核 🟡B）。
 
 **🟡5 git pull 网络失败降级档**：update._git_pull 加网络类报错分支
 （Could not resolve host / Connection timed out / unable to access / 进程异常）

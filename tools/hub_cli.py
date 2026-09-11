@@ -14,7 +14,11 @@ def _cmd_hub(args):
         print(f"已从 {args.skills} 生成 registry 到 {args.out}（{n} 个 Skill，含 index.json）")
         return 0
     if sub == "sync":
-        n = hubtool.hub_sync()
+        try:
+            n = hubtool.hub_sync()
+        except RuntimeError as e:
+            print(f"🟡 同步失败（{e}）——离线时可用本地快照，恢复网络后重试或 hub init 换源。")
+            return 1
         print(f"已同步，registry 现有 {n} 个 Skill。")
         return 0
     if sub == "search":

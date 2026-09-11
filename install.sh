@@ -90,16 +90,19 @@ if [ "$OFFLINE" -eq 1 ]; then
   # 红线（Fable 复核 🔴1）：必须【实体复制】到 $OPS_HOME/hub/registry——
   # hub init 对本地目录只写 config 指针，而运行时（REPL 症状匹配/list）只认
   # hub/registry 目录；指针在气隙下 hub sync 也自救不了（包目录可能被移走）。
+  # （Fable 复核 🟡A：OPS_HOME 须在两个使用块之前赋值——--with-model 包可能
+  #   不带 registry 快照，届时 if 块不进，set -u 下直接引用会 unbound 崩溃。）
+  OPS_HOME="${OPSAXIOM_HOME:-$HOME/.opsaxiom}"
   if [ -f "$ROOT/vendor/registry/index.json" ] || [ -f "$ROOT/registry/index.json" ]; then
     REGSRC="$ROOT/vendor/registry"; [ -f "$ROOT/registry/index.json" ] && REGSRC="$ROOT/registry"
-    OPS_HOME="${OPSAXIOM_HOME:-$HOME/.opsaxiom}"
     rm -rf "$OPS_HOME/hub/registry"
     mkdir -p "$OPS_HOME/hub"
     cp -R "$REGSRC" "$OPS_HOME/hub/registry" \
       && echo "==> Skill 库快照就位（$(ls "$OPS_HOME/hub/registry/skills" 2>/dev/null | wc -l | tr -d ' ') 个 Skill → ${OPS_HOME}/hub/registry）" \
       || echo "🟡 registry 快照复制失败（不阻断；有网后 opsaxiom hub sync 可补）"
-    # config 指针同步（hub search/pull 等命令按 config 找 registry 源）
-    "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub init "$REGSRC" >/dev/null 2>&1 || true
+    # config 指针同步（hub search/pull 等命令按 config 找 registry 源）。
+    # （Fable 复核 ⚪D：指向实体目录而非包内 vendor/——包被移走后 hub CLI 不失效。）
+    "$VENV/bin/python" "$ROOT/tools/bin/opsaxiom" hub init "$OPS_HOME/hub/registry" >/dev/null 2>&1 || true
   fi
   # 内置小模型接线（--with-model 打的包）——cp 到运行时消费的 $OPS_HOME/models/，
   # model use builtin 直接可用（llm.builtin_model_path 的默认查找路径）
