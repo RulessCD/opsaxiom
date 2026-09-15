@@ -1049,6 +1049,10 @@ class Repl:
                     sid = llm.suggest_skill(inc.handover(), self.idx, config=self.model_cfg)
                     if sid:
                         print(f"  → 模型建议再看：run {sid}（库内 Skill，徽章以库为准）")
+            else:
+                # 全证实但无需处置（结论性 done 收尾）：与 v1 终点同款问询——
+                # 这类"误报/排空"轮次此前从不产签名，attest 漏斗唯一盲区。
+                self._ask_batch_feedback(inc)
             return
         # 列出全部可处置假设，用户选一个接续进 v1（证据随 store 交接）
         print("  可处置的诊断：")
@@ -1068,6 +1072,73 @@ class Repl:
             pick = int(sel)
         h = pending[pick - 1]
         self._run_treatment(h, inc)
+
+    def _ask_batch_feedback(self, inc):
+        """批量取证全证实（无可处置项）的反馈问询（发起人裁定 2026-09-15）：
+        与 v1 终点同款话术；y → 每个结论性 done 假设出 navigator 签名并走
+        既有发件链路（attestor/login 派生与 anonymous 规则由 attest+ghutil
+        同源承担）；n → 不发 report:bug（卷宗已给结论，反馈噪音大于信息量）；
+        收尾语 y/n 都给。"""
+        import ghutil
+        try:
+            ans = input("\n  对这次诊断有帮助吗？ 👍y / 👎n\n  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        done_hyps = [h for h in inc.hyps
+                     if h.status == I.CONFIRMED
+                     and (h.terminal or "").startswith("done:")]
+        if ans.lower() not in ("y", "yes", "是"):
+            print("  已记录。结论与证据都在上方卷宗，可随时 report 导出移交。")
+            return
+        st, who, _ = ghutil.check_token()
+        attestor = who if st == "valid" else "anonymous"
+        attest_bin = str(HERE / "bin" / "opsaxiom-attest")
+        home = _home()
+        marker = home / ".attest_synced"
+        done = set(marker.read_text(encoding="utf-8").split()) if marker.exists() else set()
+        new_files = []
+        for h in done_hyps:
+            try:
+                import subprocess as _sub
+                r = _sub.run(
+                    [sys.executable, attest_bin,
+                     "--skill", h.meta["id"],
+                     "--skill-version", str(h.meta.get("version", "0.1.0")),
+                     "--outcome", "resolved", "--mode", "navigator",
+                     "--attestor", attestor],
+                    capture_output=True, text=True, timeout=10)
+            except Exception:
+                continue
+            if r.returncode != 0:
+                continue
+            adir = home / "hub" / "registry" / "skills" / h.meta["id"]
+            for v in sorted(adir.glob("*")) if adir.is_dir() else []:
+                fs = sorted((v / "attestations").glob("*.yaml"))
+                if fs and fs[-1].name not in done:
+                    new_files.append((h.meta["id"], fs[-1]))
+                    break
+        if not new_files:
+            print("  ✅ 感谢您的使用")
+            return
+        if attestor == "anonymous":
+            for _, f in new_files:
+                done.add(f.name)          # anonymous 永不上社区——只记同步
+            if st == "invalid":
+                print("  🔴 GitHub token 已失效——签名已留存本地，未同步社区。")
+                print("     运行 axiom> auth 重新配置后自动补发。")
+            elif st == "offline":
+                print("  🟡 当前离线——签名已留存本地，联网后可补同步。")
+            else:
+                print("  ✅ 感谢您的使用（签名留存本地；配置 token 后自动补发——axiom> auth）")
+        else:
+            for sid_, f in new_files:
+                body = ("automatic attestation (batch navigator).\n\n"
+                        "```yaml\n" + f.read_text(encoding="utf-8").strip() + "\n```\n")
+                if self._github_create_issue("attest: " + sid_ + " resolved",
+                                             body, ["attestation"]):
+                    done.add(f.name)
+            print("  ✅ 感谢您的使用")
+        marker.write_text("\n".join(sorted(done)) + "\n")
 
     def _run_treatment(self, h, inc):
         """续接进 v1 处置：复用 batch 已采集证据（facts + target 原样透传）。

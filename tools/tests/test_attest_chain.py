@@ -170,3 +170,95 @@ def test_n_invalid_no_browser(monkeypatch, tmp_path):
     r, calls, tmp_path, dst = _run_feedback(tmp_path, monkeypatch, "n", "invalid")
     assert calls == []
     assert opened == []
+
+
+# ---------- 批量取证全证实分支的 y/n 问询（2026-09-15）----------
+
+def _mk_batch_inc():
+    """构造三个假设的 Incident：两个结论性 done + 一个挂起 ask（对照过滤）。"""
+    import incident as I
+    inc = I.Incident("磁盘满了", params={}, target="t1")
+    def _mk(meta, status, terminal, pending=None):
+        h = I.Hypothesis({"metadata": meta, "tree": {"entry": "x", "nodes": []}}, {})
+        h.status = status
+        h.terminal = terminal
+        h.pending = pending
+        return h
+    inc.hyps = [
+        _mk({"id": "host.a", "name": "A", "version": "0.1.0"}, I.CONFIRMED, "done:d1"),
+        _mk({"id": "host.b", "name": "B", "version": "0.1.0"}, I.CONFIRMED, "done:d2"),
+        _mk({"id": "host.c", "name": "C", "version": "0.1.0"}, I.REFUTED, "escalate:e"),
+    ]
+    return inc
+
+
+def _prepare_registry(tmp_path, skill_ids):
+    for sid in skill_ids:
+        d = tmp_path / "hub" / "registry" / "skills" / sid / "0.1.0"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "skill.yaml").write_text("metadata:\n  id: " + sid + "\n")
+
+
+def test_batch_feedback_y_signs_each_done_hypoth(tmp_path, monkeypatch):
+    """y → 结论性 done 假设逐个出 navigator 签名 + 发 attestation issue。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    _prepare_registry(tmp_path, ["host.a", "host.b"])
+    import ghutil as G
+    monkeypatch.setattr(G, "check_token",
+                        lambda force=False: ("valid", "alice", ""))
+    import repl as R
+    inst = object.__new__(R.Repl)
+    sent = []
+    inst._github_create_issue = (
+        lambda title, body, labels, token=None: sent.append(title) or True)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    import subprocess as _sp
+    real_run = _sp.run
+    def fake_run(cmd, **kw):
+        if "opsaxiom-attest" in str(cmd[1:2]) and " " not in str(cmd):
+            kw2 = dict(kw); kw2.setdefault("env", {})
+            return real_run(cmd, **{**kw, "env": {**kw2["env"], "OPSAXIOM_HOME": str(tmp_path),
+                                                  "PATH": __import__("os").environ["PATH"]}})
+        return real_run(cmd, **kw)
+    monkeypatch.setattr(_sp, "run", fake_run)
+    inc = _mk_batch_inc()
+    inst._ask_batch_feedback(inc)
+    assert len(sent) == 2 and all("attest: host." in t for t in sent)
+    marker = (tmp_path / ".attest_synced").read_text()
+    assert marker.count("\n") >= 2
+
+
+def test_batch_feedback_n_no_issue(tmp_path, monkeypatch):
+    """n → 不发 report:bug 也不发 attestation（卷宗已给结论）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    import ghutil as G
+    monkeypatch.setattr(G, "check_token",
+                        lambda force=False: ("valid", "alice", ""))
+    import repl as R
+    inst = object.__new__(R.Repl)
+    sent = []
+    inst._github_create_issue = (
+        lambda title, body, labels, token=None: sent.append(title) or True)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+    inc = _mk_batch_inc()
+    inst._ask_batch_feedback(inc)
+    assert sent == []
+
+
+def test_batch_feedback_offline_local_only(tmp_path, monkeypatch):
+    """offline → 签名照落不发件，anonymous 记 marker；收尾语说明离线。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    _prepare_registry(tmp_path, ["host.a"])
+    import ghutil as G
+    monkeypatch.setattr(G, "check_token",
+                        lambda force=False: ("offline", None, ""))
+    import repl as R
+    inst = object.__new__(R.Repl)
+    sent = []
+    inst._github_create_issue = (
+        lambda title, body, labels, token=None: sent.append(title) or True)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    inc = _mk_batch_inc()
+    inst._ask_batch_feedback(inc)
+    assert sent == []                                   # 不发
+    assert (tmp_path / ".attest_synced").exists()        # anonymous 也记同步
