@@ -54,6 +54,13 @@ def flatten(plan):
 
 
 # ---------- 解析入库（复用确定性解析器，R9）----------
+# 轮内 TTL（2026-09-11 真机事故）：故障态事实默认 300s 是"跨轮次防陈旧"语义，
+# 但远程批量取证含人工贴回（慢命令超时转人工——该路径存在的意义就是承接慢命令）
+# 常超 300s，干跑时轮内事实被判过期 → 卷宗"还差"刚✅的命令。sweep 落库统一放宽
+# 到 1800s：同一轮内（自动 + 人工贴回 + 干跑）永远有效；跨轮复用照旧过期重采。
+SWEEP_TTL = 1800
+
+
 def _parse(cmd, parser, stdout):
     pfn = None
     if parser and "{{" not in parser:      # 模板化 parser 名未定→退默认解析
@@ -68,7 +75,7 @@ def _parse(cmd, parser, stdout):
 def _store_result(store, probe, stdout, now=None):
     parsed = _parse(probe["cmd"], probe.get("parser"), stdout)
     store.put_parsed(probe["cmd"], parsed, target=probe.get("target", LOCAL),
-                     parser=probe.get("parser"), now=now)
+                     parser=probe.get("parser"), now=now, ttl=SWEEP_TTL)
     return parsed
 
 

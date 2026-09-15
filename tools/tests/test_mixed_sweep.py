@@ -237,3 +237,43 @@ def test_gate_audits_connector_exception(tmp_path, monkeypatch, tmp_path_factory
             (tmp_path / "audit" / "remote.jsonl").read_text().splitlines()]
     errs = [r for r in recs if r["decision"] == "error" and "df -B1 /" in r["cmd"]]
     assert errs and errs[0]["cmd"] and errs[0]["exec_as"] == "root"
+
+
+# ---------- 轮内 TTL（2026-09-11 真机事故回归）----------
+
+def test_intra_round_ttl_survives_long_manual_paste():
+    """复刻真机时间线：远程批量取证 → find 超时 60s 转人工 → 人去远端跑
+    find / -xdev 并贴回（~7 分钟）→ dry_run。轮内事实必须仍活着，
+    卷宗不得再报"还差"刚 ✅ 过的命令（SWEEP_TTL=1800 > 300 默认值）。"""
+    ids = ["host.storage.capacity.disk-full",
+           "host.storage.disk-io-error",
+           "host.storage.iops-latency-mismatch"]
+    skills = [I.load_skill_by_id(sid)[1] for sid in ids]
+    inc = I.Incident("磁盘满了", params={"mount": "/"}, target="高等云肆")
+    inc.add_hypotheses(skills)
+
+    t0 = 1_000_000.0                       # 固定时钟
+    # 自动取证批：全部探针入库（走 sweep._store_result 真路径，带 SWEEP_TTL）
+    for w in inc.plan()["waves"]:
+        for p in w["probes"]:
+            sweep._store_result(inc.store, p, "1", now=t0)
+
+    inc.dry_run(now=t0 + 420)              # 人工贴回耗时 7 分钟（> 默认 300s TTL）
+    d = inc.dossier(now=t0 + 420)
+    bad = [h for st, items in d.items() for h in items if h["missing"]]
+    assert bad == [], f"轮内事实被误判过期: {[(h['name'], h['missing']) for h in bad]}"
+
+
+def test_cross_round_facts_still_expire():
+    """跨轮语义不变：300s 过的非本轮事实照旧过期重采（诚实原则保留）。
+    seed_fact 走默认 TTL，≠ sweep 落库。"""
+    inc = I.Incident("磁盘满了", params={"mount": "/"}, target="web-01")
+    inc.store.put_parsed("df -B1 --output=target,size,used,avail,pcent /",
+                         {"rows": [{"pcent": "91%"}], "lines": []},
+                         target="web-01", now=1_000_000.0)     # 默认 TTL=300
+    assert inc.store.get_parsed("df -B1 --output=target,size,used,avail,pcent /",
+                                target="web-01", now=1_000_000.0 + 420) is None
+
+
+def test_sweep_ttl_constant():
+    assert sweep.SWEEP_TTL == 1800
