@@ -110,6 +110,11 @@ def main():
     except Exception:
         pass
     try:
+        from attest_cli import add_attest  # 2026-09-11 补交入口（docs/10 第三章）
+        add_attest(sub)
+    except Exception:
+        pass
+    try:
         from model_cli import add_model  # M-2 模型配置
         add_model(sub)
     except Exception:

@@ -130,6 +130,8 @@ def _independent_valid_attestations(skill_dir):
     """返回独立且验签有效的 attestation 数（docs/05 §3：不同 attestor 且 env 分桶不同）。
 
     贪心选一个最大子集：attestor 互不相同 **且** env_fingerprint 分桶互不相同。
+    环境三元组 = (os 家族, os 主版本桶, 机器架构)——arch 于 2026-09-11 替代
+    已废除的 scale_bucket（旧文件无 arch 时该维失权，.get 返回 None）。
     """
     from importlib.machinery import SourceFileLoader
     attest = SourceFileLoader("attest_p", str(HERE / "bin" / "opsaxiom-attest")).load_module()
@@ -145,7 +147,7 @@ def _independent_valid_attestations(skill_dir):
         who = att.get("attestor", "")
         env = att.get("env_fingerprint", {})
         os_ = env.get("os", {})
-        envkey = (os_.get("family"), os_.get("version_bucket"), env.get("scale_bucket"))
+        envkey = (os_.get("family"), os_.get("version_bucket"), env.get("arch"))
         if who in seen_attestor or envkey in seen_env:
             continue                     # 不独立（同人或同环境分桶）
         seen_attestor.add(who); seen_env.add(envkey); kept.append(af.name)

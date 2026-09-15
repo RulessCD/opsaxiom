@@ -26,7 +26,7 @@ def test_attest_generates_valid_desensitized(tmp_path, monkeypatch):
         encoding="utf-8")
     r = _run("--skill", "host.cpu.load-high", "--skill-version", "0.1.0",
              "--outcome", "resolved", "--mode", "navigator",
-             "--os-family", "rhel", "--os-version", "8.5.2", "--scale", "47",
+             "--os-family", "rhel", "--os-version", "8.5.2",
              "--rollback-exercised", "--attestor", "gh:t", "--date", "2026-01-01")
     assert r.returncode == 0, r.stderr
     adir = cdir / "attestations"
@@ -34,9 +34,10 @@ def test_attest_generates_valid_desensitized(tmp_path, monkeypatch):
     assert len(files) == 1
     import yaml
     att = yaml.safe_load(files[0].read_text())
-    # 脱敏：精确版本被抹成分桶，精确规模被抹成区间
+    # 脱敏：精确版本被抹成分桶；架构自动探测（scale 已废除 2026-09-11）
     assert att["env_fingerprint"]["os"]["version_bucket"] == "8.x"
-    assert att["env_fingerprint"]["scale_bucket"] == "10-100 hosts"
+    assert "arch" in att["env_fingerprint"]
+    assert "scale" not in files[0].read_text()   # scale 语义全面退场
     assert "8.5.2" not in files[0].read_text()   # 精确版本不得残留
     # 本次运行不得在仓库 skills/ 新增任何签名字段为 anonymous/gh:t 的文件（历史存档只读）
     leaked = [p for p in (ROOT / "skills").rglob("attestations/*.yaml")

@@ -24,6 +24,7 @@ import yaml            # noqa: E402
 import exprlang        # noqa: E402
 import parsers         # noqa: E402
 import run_sim         # noqa: E402  复用 _is_readonly / _default_parse
+import ghutil          # noqa: E402  token 门面（探活/身份派生，2026-09-11 收口）
 
 _TEMPLATE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 MISSING = "⟨?⟩"          # 字段缺失占位（U-1：别再渲染成空串留下语义黑洞）
@@ -410,43 +411,102 @@ class Session:
             self._report_issue(n)
 
     def _has_gh_token(self):
-        p = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
-                     pathlib.Path.home() / ".opsaxiom")) / "gh_token"
-        return p.exists() and p.read_text(encoding="utf-8").strip() != ""
+        """薄壳：文件里有 token 即 True（不发请求）。细粒度状态走 ghutil.check_token。"""
+        return ghutil.read_token() != ""
 
-    def _push_attest_silent(self, n):
-        """提 attestation issue 到 registry（签名已落地，issue 仅告知社区）。"""
+    def _gh_post_issue(self, title, body, labels):
+        """统一发件出口。ghutil 探活四分支：
+        valid → 发，返回 True；invalid → 明说失效指引 auth，返回 False；
+        offline → 说明离线，返回 False；missing → 由调用方先问（不走这里）。"""
+        st, who, why = ghutil.check_token()
+        if st == "invalid":
+            self.io._p(f"  🔴 GitHub token 已失效，本次未能同步社区。{why}")
+            self.io._p("     运行 axiom> auth 重新配置后，存量签名会自动补发。")
+            return False
+        if st == "offline":
+            self.io._p("  🟡 当前离线，本次未能同步社区——联网后会自动补发（auth 配置过的）。")
+            return False
         import json as _j
         import subprocess as _sp
-        home = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
-                         pathlib.Path.home() / ".opsaxiom"))
-        token = (home / "gh_token").read_text(encoding="utf-8").strip()
-        sid = self.skill["metadata"]["id"]
-        title = "attest: " + sid + " resolved"
-        body = ("automatic attestation.\n\n"
-                "skill: " + sid + "\n"
-                "version: " + str(self.skill["metadata"].get("version", "0.1.0")) + "\n"
-                "outcome: resolved\n"
-                "mode: navigator")
-        data = _j.dumps({"title": title, "body": body,
-                         "labels": ["attestation"]})
+        data = _j.dumps({"title": title, "body": body, "labels": labels})
         try:
-            _sp.run(
-                ["curl", "-s", "-o", "/dev/null",
+            r = _sp.run(
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                  "-X", "POST",
-                 "-H", "Authorization: Bearer " + token,
+                 "-H", "Authorization: Bearer " + ghutil.read_token(),
                  "-H", "Accept: application/vnd.github+json",
                  "-H", "User-Agent: OpsAxiom",
                  "-d", data,
                  "https://api.github.com/repos/hf4Academic/opsaxiom-registry/issues"],
                 capture_output=True, text=True, timeout=15)
+            return r.stdout.strip() == "201"
         except Exception:
-            pass
+            return False
+
+    def _attest_issue_body(self):
+        """签名体随附：整份 attestation YAML 进 issue（发件端已保证 attestor≠anonymous）。"""
+        adir = self._attest_dir_of_current_skill()
+        if not adir:
+            return ""
+        files = sorted(adir.glob("*.yaml"))
+        if not files:
+            return ""
+        att = files[-1].read_text(encoding="utf-8").strip()
+        return ("automatic attestation.\n\n"
+                "skill: " + self.skill["metadata"]["id"] + "\n"
+                "version: " + str(self.skill["metadata"].get("version", "0.1.0")) + "\n"
+                "outcome: resolved\n"
+                "mode: navigator\n"
+                "\n```yaml\n" + att + "\n```\n")
+
+    def _attest_dir_of_current_skill(self):
+        home = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                         pathlib.Path.home() / ".opsaxiom"))
+        sd = home / "hub" / "registry" / "skills" / self.skill["metadata"]["id"]
+        for v in sorted(sd.glob("*")) if sd.is_dir() else []:
+            if (v / "attestations").is_dir():
+                return v / "attestations"
+        # registry 无条目时按原落盘约定找版本目录
+        ver = str(self.skill["metadata"].get("version", "0.1.0"))
+        d = sd / ver / "attestations"
+        return d if d.is_dir() else None
+
+    def _push_attest_silent(self, n):
+        """send attest issue with signature attached（attestor 已经不是 anonymous）。"""
+        sid = self.skill["metadata"]["id"]
+        ok = self._gh_post_issue(
+            "attest: " + sid + " resolved",
+            self._attest_issue_body(),
+            ["attestation"])
+        if ok:
+            self._mark_synced()
+
+    def _synced_marker(self):
+        home = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                         pathlib.Path.home() / ".opsaxiom"))
+        return home / ".attest_synced"
+
+    def _mark_synced(self):
+        adir = self._attest_dir_of_current_skill()
+        if not adir:
+            return
+        files = sorted(adir.glob("*.yaml"))
+        if files:
+            with open(self._synced_marker(), "a", encoding="utf-8") as f:
+                f.write(files[-1].name + "\n")
+
+    def synced_names(self):
+        p = self._synced_marker()
+        return set(p.read_text(encoding="utf-8").split()) if p.exists() else set()
 
     def _offer_attest_silent(self, n):
-        """y 反馈后：静默生成签名 → 有 token 就推送 → 无 token 提醒 auth。"""
+        """y 反馈后：签名本地落盘（永远执行，凭据不丢）→ token 探活分派发件。
+        attestor 派生（发起人裁定 2026-09-11）：valid → GitHub login；
+        其他状态 → anonymous（签名照落，但 anonymous 凭据永不发社区，auth 后补发）。"""
         mode = {"guided": "navigator", "real": "copilot"}.get(self.mode, "navigator")
         attest_bin = str(HERE / "bin" / "opsaxiom-attest")
+        st, who, _ = ghutil.check_token()
+        attestor = who if st == "valid" else "anonymous"
         try:
             import subprocess as _sub
             r = _sub.run(
@@ -454,74 +514,66 @@ class Session:
                  "--skill", self.skill["metadata"]["id"],
                  "--skill-version", str(self.skill["metadata"].get("version", "0.1.0")),
                  "--outcome", "resolved", "--mode", mode,
-                 "--os-family", "linux", "--scale", "1",
-                 "--attestor", "anonymous"],
+                 "--attestor", attestor],
                 capture_output=True, text=True, timeout=10)
             self._log(n["id"], "attest", ok=(r.returncode == 0))
         except Exception:
             pass
 
-        # token 检查
-        first_run_marker = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
-                         pathlib.Path.home() / ".opsaxiom")) / ".attest_asked"
-        if self._has_gh_token():
-            self._push_attest_silent(n)
+        if attestor == "anonymous":
+            if st == "invalid":
+                self.io._p("  🔴 GitHub token 已失效——签名已留存本地，未同步社区。")
+                self.io._p("     运行 axiom> auth 重新配置后自动补发。")
+            elif st == "offline":
+                self.io._p("  🟡 当前离线——签名已留存本地，联网后可补同步。")
+            else:   # missing：首次未配置
+                marker = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
+                                      pathlib.Path.home() / ".opsaxiom")) / ".attest_asked"
+                if not marker.exists():
+                    self.io._p("  同步至社区可帮更多人完善排查经验，只需一次配置（约 1 分钟），"
+                               "是否开始？ [y/n]")
+                    try:
+                        a = input("> ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        a = "n"
+                    if a in ("y", "yes", "是"):
+                        self.io._p("  运行 axiom> auth 开始配置；")
+                        self.io._p("  配置完成后，存量签名会自动补发。")
+                    else:
+                        marker.write_text("")
+                else:
+                    self.io._p("  ✅ 感谢您的使用（签名留存本地；配置 token 后自动补发——axiom> auth）")
+            return
+
+        if self._gh_post_issue("attest: " + self.skill["metadata"]["id"] + " resolved",
+                               self._attest_issue_body(), ["attestation"]):
+            self._mark_synced()
             self.io._p("  ✅ 感谢您的使用")
-        elif not first_run_marker.exists():
-            self.io._p("  同步至社区可帮更多人完善排查经验，只需一次配置（约 1 分钟），"
-                       "是否开始？ [y/n]")
-            try:
-                a = input("> ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                a = "n"
-            if a in ("y", "yes", "是"):
-                # TODO Batch 5：引导 auth 配置流程
-                self.io._p("  请执行 auth 完成配置。")
-            else:
-                first_run_marker.write_text("")
-                self.io._p("  ✅ 感谢您的使用"
-                           "（签名未同步社区，可通过 auth 指令完成配置后自动同步）")
-        else:
-            self.io._p("  ✅ 感谢您的使用"
-                       "（签名未同步社区，可通过 auth 指令完成配置后自动同步）")
 
     def _report_issue(self, n):
-        """n 反馈后：统一上报社区（有 token 静默提，无 token 浏览器预填）。"""
-        import json as _j
-        import subprocess as _sp
-        home = pathlib.Path(os.environ.get("OPSAXIOM_HOME",
-                         pathlib.Path.home() / ".opsaxiom"))
+        """n 反馈 → 上报社区。有 token（valid）→ 静默提；invalid/offline →
+        明说原因不走浏览器（offeline 开浏览器无意义，发起人裁定 2026-09-11）；
+        missing → token 首问后浏览器预填兜底。"""
         sid = self.skill["metadata"]["id"]
         title = "诊断无帮助：" + sid
         body = ('用户在诊断结束时反馈"无帮助"。\n\n'
                 "skill: " + sid + "\n"
                 "version: " + str(self.skill["metadata"].get("version", "0.1.0")) + "\n"
                 "\n---\n请补充具体原因（结论错误 / 覆盖不足 / 其他）：")
-        token = ""
-        tp = home / "gh_token"
-        if tp.exists():
-            token = tp.read_text(encoding="utf-8").strip()
-        if token:
-            data = _j.dumps({"title": title, "body": body,
-                             "labels": ["report:bug"]})
-            try:
-                _sp.run(
-                    ["curl", "-s", "-o", "/dev/null",
-                     "-X", "POST",
-                     "-H", "Authorization: Bearer " + token,
-                     "-H", "Accept: application/vnd.github+json",
-                     "-H", "User-Agent: OpsAxiom",
-                     "-d", data,
-                     "https://api.github.com/repos/hf4Academic/opsaxiom-registry/issues"],
-                    capture_output=True, text=True, timeout=15)
-                self.io._p("  ✅ 感谢您的反馈，社区将查收并完善 skills 资产。")
-                return
-            except Exception:
-                pass
-        # 无 token 或失败 → 浏览器预填
+        st, _, _ = ghutil.check_token()
+        if st == "invalid":
+            self.io._p(f"  🔴 GitHub token 已失效，本次未能上报社区。")
+            self.io._p("     运行 axiom> auth 重新配置。")
+            return
+        if st == "offline":
+            self.io._p("  🟡 当前离线，本次反馈未能上报——请联网后再试。")
+            return
+        if st == "valid" and self._gh_post_issue(title, body, ["report:bug"]):
+            self.io._p("  ✅ 感谢您的反馈，社区将查收并完善 skills 资产。")
+            return
+        # missing（或 valid 但发失败）→ 浏览器预填兜底
         import urllib.parse
         import webbrowser
-        import platform
         q = urllib.parse.quote
         url = ("https://github.com/hf4Academic/opsaxiom-registry/issues/new"
                "?title=" + q(title) + "&labels=" + q("report:bug")

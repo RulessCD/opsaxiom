@@ -50,6 +50,39 @@ def _skill_summary(s):
     return s.get("feedback", {}).get("ask", "")
 
 
+def reindex_registry(reg_dir, include_draft=True):
+    """对【已是 registry 形态】的树原位重建 index.json——只读 skills/ 不动树。
+    （bot 落树后刷新用：build_registry 的 src→out 复制语义不适用于
+    src==out/skills 的自举场景——会 rmtree 掉刚写入的凭据。）"""
+    reg = pathlib.Path(reg_dir)
+    index = []
+    import localskill
+    for sp in sorted((reg / "skills").rglob("skill.yaml")):
+        s = yaml.safe_load(sp.read_text(encoding="utf-8"))
+        m = s["metadata"]
+        try:
+            localskill.assert_shareable(m, where=str(sp))  # 个人层混进公共库→跳过不索引
+        except Exception:
+            continue
+        if not include_draft and m.get("maturity") == "draft":
+            continue
+        atts = list((sp.parent / "attestations").glob("*.yaml")) if (sp.parent / "attestations").is_dir() else []
+        signers = []
+        for a in atts:
+            sig = (yaml.safe_load(a.read_text(encoding="utf-8")) or {}).get("signature", "")
+            if sig.count(":") >= 2:
+                signers.append(sig.split(":")[1][:12])
+        index.append({
+            "id": m["id"], "version": m["version"], "maturity": m["maturity"],
+            "taxonomy": m["taxonomy"], "domain": m["taxonomy"].split("/")[0],
+            "name": m["name"], "summary": _skill_summary(s),
+            "attestations": len(atts), "signers": sorted(set(signers)),
+        })
+    (reg / "index.json").write_text(
+        json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    return len(index)
+
+
 # ---------- 建 registry（从 skills/ 生成，供演示/发布）----------
 def build_registry(skills_dir, out_dir, include_draft=True):
     """include_draft=False：过滤 ⚪draft（对外发布的 registry 用——与 policy.md

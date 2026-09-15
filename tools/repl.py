@@ -327,26 +327,93 @@ class Repl:
         return " ".join(rest), params
 
     def _auth(self):
-        """TODO Batch 5：引导用户配置 GitHub token。"""
+        """GitHub token 配置/校验/补发三合一（发起人裁定 2026-09-11）：
+        每次进 auth 都真探活（无感失效的解药）；配置或重配成功后，
+        自动把存量未同步签名补发社区（补发只针对新代码上签的新文件）。"""
+        import ghutil
         token_file = _home() / "gh_token"
-        if token_file.exists() and token_file.read_text(encoding="utf-8").strip():
-            print("  ✅ GitHub token 已配置。")
+        had = token_file.exists() and token_file.read_text(encoding="utf-8").strip()
+        if had:
+            st, who, why = ghutil.check_token()
+            if st == "offline":
+                print("  🟡 网络不可达，暂无法校验 token（不判失效）。恢复网络后再跑 auth 校验。")
+                return
+            if st == "valid":
+                print(f"  ✅ GitHub token 已配置（身份：{who}）。")
+                self._flush_pending_attest()
+                return
+            # invalid → 当场引导重配
+            print(f"  🔴 已配置的 token 已失效（401）。{why}")
         else:
             print("  尚未配置 GitHub token。")
-            print("  前往 https://github.com/settings/tokens/new")
-            print("  生成 Classic token，勾选 public_repo 权限（仅公开仓库读写），")
-            print("  将 token 粘贴至下方：")
-            try:
-                tok = input("token> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                return
-            if tok:
-                token_file.write_text(tok, encoding="utf-8")
-                token_file.chmod(0o600)
-                print("  ✅ token 已保存（0600 权限）。后续社区反馈将自动同步。")
+        print("  前往 https://github.com/settings/tokens/new")
+        print("  生成 Classic token，勾选 public_repo 权限（仅公开仓库读写），")
+        print("  将 token 粘贴至下方：")
+        try:
+            tok = input("token> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not tok:
+            return
+        token_file.write_text(tok, encoding="utf-8")
+        token_file.chmod(0o600)
+        ghutil.invalidate_cache()
+        st, who, _ = ghutil.check_token(force=True)
+        if st != "valid":
+            print("  ⚠ token 已保存，但探活未通过（" +
+                  ("token 本身无效" if st == "invalid" else "网络不可达") +
+                  "）——修复网络/换 token 后再跑 auth 校验及补发。")
+            return
+        print(f"  ✅ token 已保存（0600 权限），身份：{who}。后续社区反馈将自动同步。")
+        self._flush_pending_attest()
+
+    def _flush_pending_attest(self):
+        """auth 成功后补发存量签名：扫本地 registry 各 Skill 的 attestations/，
+        不在 .attest_synced 名单内的逐条发 issue。首次启用时存量全部标记为
+        已同步（不补发）——旧文件 attestor 名实不符，补发无意义。"""
+        import ghutil
+        home = _home()
+        marker = home / ".attest_synced"
+        done = set(marker.read_text(encoding="utf-8").split()) if marker.exists() else None
+        if done is None:
+            # 首次启用：存量全部标记已同步（旧文件 attestor 名实不符，补发无意义）
+            done = {f.name
+                    for adir in (home / "hub" / "registry" / "skills").glob("*/*/attestations")
+                    for f in adir.glob("*.yaml")}
+            marker.write_text("\n".join(sorted(done)) + ("\n" if done else ""))
+            print("  （首次启用同步：存量签名已标记，不补发）")
+            return
+        pending = []
+        for adir in (home / "hub" / "registry" / "skills").glob("*/*/attestations"):
+            for f in sorted(adir.glob("*.yaml")):
+                if f.name not in done:
+                    pending.append(f)
+        if not pending:
+            return
+        ok = fail = 0
+        for f in pending:
+            att = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            attestor = (att.get("attestor") or "anonymous").strip()
+            if attestor == "anonymous":
+                done.add(f.name)          # anonymous 永不上社区——记同步避免反复扫
+                continue
+            sid = att.get("skill", "?")
+            body = ("automatic attestation (deferred sync).\n\n"
+                    "```yaml\n" + f.read_text(encoding="utf-8").strip() + "\n```\n")
+            if self._github_create_issue("attest: " + sid + " resolved", body,
+                                         ["attestation"]):
+                done.add(f.name); ok += 1
+            else:
+                fail += 1
+        marker.write_text("\n".join(sorted(done)) + "\n")
+        if ok or fail:
+            print(f"  补发完成：{ok} 条成功" + (f"，{fail} 条失败（下次 auth 重试）" if fail else ""))
 
     def _sug(self, body):
-        """上报未覆盖场景：有 token → 静默提 issue；无 token → 浏览器预填。"""
+        """上报未覆盖场景（发起人裁定 2026-09-11）：valid → 静默提；
+        invalid → 明说失效指引 auth；offline → 说明离线（不开浏览器——没网
+        开了也提交不了）；missing → 浏览器预填兜底。"""
+        import ghutil
         body = body.strip() or self.last_unmatched or ""
         if body:
             print(f"  （已预填您的输入：{body[:60]}…）")
@@ -361,18 +428,21 @@ class Repl:
         title = "技能缺失：" + body[:80]
         import platform
         body_text = "自动采集自用户反馈。\n\n---\n环境：" + platform.system()
-        # 有 token → 静默用 GitHub API 提 issue
-        token = self._read_token()
-        if token:
+        st, _, _ = ghutil.check_token()
+        if st == "invalid":
+            print("  🔴 GitHub token 已失效，本次未能上报社区。请运行 auth 重新配置。")
+            return
+        if st == "offline":
+            print("  🟡 当前离线，本次反馈未能上报——请联网后再试（sug 重新提交）。")
+            return
+        if st == "valid":
             try:
-                ok = self._github_create_issue(title, body_text, ["report:missing"],
-                                               token=token)
-                if ok:
+                if self._github_create_issue(title, body_text, ["report:missing"]):
                     print("  ✅ 感谢您的反馈，社区将查收并完善 skills 资产。")
                     return
             except Exception:
                 pass
-            # API 失败降级为浏览器
+        # missing（或发失败）→ 浏览器预填兜底
         import urllib.parse
         q = urllib.parse.quote
         url = ("https://github.com/hf4Academic/opsaxiom-registry/issues/new"
@@ -444,24 +514,20 @@ class Repl:
         print(ov_path.read_text(encoding="utf-8"))
 
     @staticmethod
-    def _read_token():
-        p = _home() / "gh_token"
-        if p.exists():
-            tok = p.read_text(encoding="utf-8").strip()
-            if tok:
-                return tok
-        return ""
-
-    @staticmethod
-    def _github_create_issue(title, body, labels, token):
+    def _github_create_issue(title, body, labels, token=None):
+        """薄壳（默认从 ghutil 门面读 token——发件出口单点）。"""
         import json as _j
         import subprocess as _sp
+        import ghutil
+        tok = token or ghutil.read_token()
+        if not tok:
+            return False
         data = _j.dumps({"title": title, "body": body, "labels": labels})
         try:
             r = _sp.run(
                 ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                  "-X", "POST",
-                 "-H", "Authorization: Bearer " + token,
+                 "-H", "Authorization: Bearer " + tok,
                  "-H", "Accept: application/vnd.github+json",
                  "-H", "User-Agent: OpsAxiom",
                  "-d", data,

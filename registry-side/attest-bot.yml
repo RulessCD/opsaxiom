@@ -1,0 +1,12 @@
+# OpsAxiom attest bot 开关（registry 仓库维护者改这里，workflow 永不动）
+#
+# mode: direct = 过验凭据直接 commit 进 main（单人维护期默认）
+#       pr     = 过验凭据开分支 + 开 PR 等人合并（多维护者/分支保护期用）
+# 注意：main 开了分支保护规则时 direct 会静默失效（bot 内置 token 无 bypass），
+#       届时把 mode 翻回 pr 即可。
+#
+# opsaxiom_ref: bot 校验器跟随的 opsaxiom 代码版本（hf4Academic/opsaxiom）。
+#   main = 永远跟随官方仓主干（当前凭据格式演进期，校验器与格式同版发布）。
+#   将来凭据格式冻结后若需固定校验器版本，把 main 换成 tag 名（如 v0.2.0）。
+mode: direct
+opsaxiom_ref: main

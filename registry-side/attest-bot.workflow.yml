@@ -1,0 +1,96 @@
+# OpsAxiom attestation 入库 bot（registry 侧唯一自动化写树通道）。
+#
+# 职责：监听带 attestation 标签的 issue → 解析签名 YAML → 五道校验
+# （schema / 验签 / 幂等 / skill 存在性 / attestor==issue 作者）→ 落树 →
+# 重建 index.json → 按开关 config（.github/attest-bot.yml）direct-commit 或开 PR →
+# 逐条 issue 评论回执 + 打标 + 关闭。
+#
+# 校验逻辑不在本文件内——checkout opsaxiom 仓库跑 tools/attest_batch.py
+# （bot 与客户端 hub import 共用同一套判定，单源）。
+#
+# label 约定：
+#   attestation      客户端发件时自带（认领信号）
+#   attest:accepted  bot 回执（需在仓库 Labels 里预建这 2 个 label）
+#   attest:rejected  bot 回执（拒因写在 issue 评论里）
+
+name: attest-bot
+
+on:
+  schedule:
+    - cron: "23 21 * * *"     # 每日 05:23 北京时间（错峰整点）
+  issues:
+    types: [labeled]          # attestation 标签即时触发
+  workflow_dispatch: {}       # 手动按钮（逃生阀）
+
+permissions:
+  contents: write             # commit / 开分支 / 开 PR
+  issues: write               # 评论 / 打标 / 关闭
+
+concurrency:
+  group: attest-bot
+  cancel-in-progress: false   # 批次不互相掐；排队串行
+
+jobs:
+  collect:
+    if: github.event_name != 'issues' || github.event.label.name == 'attestation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout registry（写树目标）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read config
+        id: cfg
+        run: |
+          MODE=$(sed -n 's/^mode: *//p' .github/attest-bot.yml | head -1 | tr -d ' ')
+          REF=$(sed -n 's/^opsaxiom_ref: *//p' .github/attest-bot.yml | head -1 | tr -d ' ')
+          echo "mode=${MODE:-direct}" >> "$GITHUB_OUTPUT"
+          echo "ref=${REF:-main}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout opsaxiom（校验器来源，跟随 config 的 ref）
+        uses: actions/checkout@v4
+        with:
+          repository: hf4Academic/opsaxiom
+          ref: ${{ steps.cfg.outputs.ref }}
+          path: opsaxiom-src
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps（jsonschema/pyyaml——opsaxiom 校验器的最小依赖面）
+        run: pip install pyyaml jsonschema cryptography
+
+      - name: Process attestation issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ steps.cfg.outputs.mode }}
+        run: |
+          set -euo pipefail
+          python opsaxiom-src/tools/attest_bot_run.py
+
+      - name: Direct commit（mode=direct）
+        if: env.BATCH_HAS_CHANGES == '1' && env.BATCH_MODE == 'direct'
+        run: |
+          git config user.name "opsaxiom-attest-bot"
+          git config user.email "attest-bot@users.noreply.github.com"
+          git add skills/ index.json
+          git commit -m "attest-bot: 入库 $BATCH_ACCEPTED 条凭据（$(date -u +%F)）" || echo "无变更"
+          git push
+
+      - name: PR branch（mode=pr）
+        if: env.BATCH_HAS_CHANGES == '1' && env.BATCH_MODE == 'pr'
+        run: |
+          BR="attest-batch-$(date -u +%F)"
+          git config user.name "opsaxiom-attest-bot"
+          git config user.email "attest-bot@users.noreply.github.com"
+          git checkout -b "$BR"
+          git add skills/ index.json
+          git commit -m "attest-bot: 批次入库（$(date -u +%F)）"
+          git push origin "$BR"
+          gh pr create --fill --label attestation || true
+
+      - name: Summary
+        run: echo "批次处理完成：受理 $BATCH_ACCEPTED / 拒收 $BATCH_REJECTED / 幂等跳过 $BATCH_SKIPPED"

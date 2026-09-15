@@ -7,8 +7,9 @@ opsaxiom-attest —— 生成实地验证记录（attestation）骨架（Q-4，d
 
 用法（flag 驱动，便于脚本/测试；缺省字段进入交互式补全）：
   opsaxiom-attest --skill <id> --skill-version <v> --outcome resolved \
-     --mode navigator --os-family rhel --os-version 8.5.2 --scale 47 \
+     --mode navigator [--os-family rhel --os-version 8.5.2] \
      --rollback-exercised --attestor gh:alice [--deviation "在第3步改用了 X"]...
+  （os/version 缺省时自动探测本机真值；环境指纹零询问零自报）
 
 落盘：skills/<域>/<slug>/attestations/<date>-<shorthash>.yaml
 签名：本骨架写 signature: "UNSIGNED-TODO"（真实签名在后续轮次接入）。
@@ -134,16 +135,16 @@ def bucket_version(v):
     return f"{m.group(1)}.x" if m else "unknown"
 
 
-def bucket_scale(n):
-    """主机/实例规模分桶，抹掉精确数字。"""
-    try:
-        n = int(n)
-    except (ValueError, TypeError):
-        return "unknown"
-    for hi, label in [(10, "1-10"), (100, "10-100"), (1000, "100-1000")]:
-        if n < hi:
-            return f"{label} hosts"
-    return ">1000 hosts"
+def _env_fingerprint(os_family=None, os_version=None):
+    """本机环境画像——全部自动探测，零询问零自报（发起人裁定 2026-09-11）。
+    三元组 = (os 家族, os 主版本桶, 机器架构)。都是分桶值，无标识性数据。"""
+    import platform
+    return {
+        "os": {"family": (os_family or platform.system() or "unknown").lower(),
+               "version_bucket": bucket_version(
+                   os_version or platform.release() or "")},
+        "arch": platform.machine() or "unknown",
+    }
 
 
 def _skill_dir(skill_id):
@@ -189,11 +190,7 @@ def build(args):
         "skill_version": args.skill_version or _prompt("skill_version", "0.1.0"),
         "outcome": args.outcome or _prompt("outcome", "resolved", OUTCOMES),
         "mode": args.mode or _prompt("mode", "navigator", MODES),
-        "env_fingerprint": {
-            "os": {"family": args.os_family or _prompt("os family", "linux"),
-                   "version_bucket": bucket_version(args.os_version or _prompt("os version", ""))},
-            "scale_bucket": bucket_scale(args.scale if args.scale is not None else _prompt("规模(主机数)", "1")),
-        },
+        "env_fingerprint": _env_fingerprint(args.os_family, args.os_version),
         "deviations": list(args.deviation or []),
         "rollback_exercised": bool(args.rollback_exercised),
         "attestor": args.attestor or _prompt("attestor (gh:user / sso:id)", "anonymous"),
@@ -235,22 +232,25 @@ def _prefill_from_session(args):
           f"rollback={args.rollback_exercised}）", file=sys.stderr)
 
 
-def main():
-    ap = argparse.ArgumentParser(prog="opsaxiom-attest")
-    ap.add_argument("--skill"); ap.add_argument("--skill-version")
-    ap.add_argument("--outcome", choices=OUTCOMES); ap.add_argument("--mode", choices=MODES)
-    ap.add_argument("--os-family"); ap.add_argument("--os-version")
-    ap.add_argument("--scale")
-    ap.add_argument("--rollback-exercised", action="store_true")
-    ap.add_argument("--attestor")
-    ap.add_argument("--deviation", action="append")
-    ap.add_argument("--date", help="覆盖日期(测试用，YYYY-MM-DD)")
-    ap.add_argument("--keygen", action="store_true", help="仅生成/查看签名密钥对后退出")
-    ap.add_argument("--verify", metavar="FILE", help="验证一个 attestation 文件的签名")
-    ap.add_argument("--from-session", metavar="SID", help="从会话状态预填 skill/mode/回滚")
-    args = ap.parse_args()
+def main(argv=None):
+    """argv=None → sys.argv（独立运行）；传Namespace → 主 CLI 转发（attest_cli）。"""
+    if isinstance(argv, argparse.Namespace):
+        args = argv
+    else:
+        ap = argparse.ArgumentParser(prog="opsaxiom-attest")
+        ap.add_argument("--skill"); ap.add_argument("--skill-version")
+        ap.add_argument("--outcome", choices=OUTCOMES); ap.add_argument("--mode", choices=MODES)
+        ap.add_argument("--os-family"); ap.add_argument("--os-version")
+        ap.add_argument("--rollback-exercised", action="store_true")
+        ap.add_argument("--attestor")
+        ap.add_argument("--deviation", action="append")
+        ap.add_argument("--date", help="覆盖日期(测试用，YYYY-MM-DD)")
+        ap.add_argument("--keygen", action="store_true", help="仅生成/查看签名密钥对后退出")
+        ap.add_argument("--verify", metavar="FILE", help="验证一个 attestation 文件的签名")
+        ap.add_argument("--from-session", metavar="SID", help="从会话状态预填 skill/mode/回滚")
+        args = ap.parse_args(argv)
 
-    if args.from_session:
+    if getattr(args, "from_session", None):
         _prefill_from_session(args)
 
     if args.keygen:

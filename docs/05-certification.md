@@ -42,17 +42,18 @@ skill: host.storage.disk-full
 skill_version: 0.3.0
 outcome: resolved            # resolved | partial | failed | made_worse
 mode: navigator              # navigator | copilot | autopilot
-env_fingerprint:             # 脱敏的环境画像——只有分桶信息，无任何标识性数据
+env_fingerprint:             # 脱敏的环境画像——自动探测（零询问零自报，2026-09-11 起）
   os: {family: rhel, version_bucket: "8.x"}
-  scale_bucket: "10-100 hosts"
+  arch: x86_64               # 本机架构；旧字段 scale_bucket 已废除采集（存量文件保留）
 deviations: []               # 与决策树的偏离步骤（有偏离 = 决策树改进线索）
 rollback_exercised: false    # 是否实际触发过回滚（true 的权重显著更高）
-attestor: gh:someuser        # 签名者（GitHub 身份 / 企业 SSO 身份）
+attestor: someuser           # 签名者 = GitHub 账号（token 派生，与发件 issue 作者强一致）
 signature: <detached-sig>    # 对本文件内容的签名，工具链自动生成
 ```
 
-提交通道：`opsagent attest` 命令自动生成文件并发 PR（或经 registry API）。
-**attestation 目录 append-only**：只增不改不删，形成可审计的历史。
+提交通道：y 反馈自动生成并经 token 同步社区（issue → bot 落树），或
+`opsaxiom attest --from-session <会话号>` 补交；`attestor=anonymous` 的凭据
+仅在本地留存，不上传社区。**attestation 目录 append-only**：只增不改不删。
 
 ### 2.1 签名机制（U-4 落地）
 
@@ -72,10 +73,13 @@ signature: <detached-sig>    # 对本文件内容的签名，工具链自动生�
 
 "≥ 3 份独立 attestation"中的**独立**定义为：
 - 不同 attestor，且
-- env_fingerprint 不同分桶，且
+- env_fingerprint 不同分桶（(os 家族, os 主版本桶, 架构) 三元组；
+  scale 维度 2026-09-11 起废除，存量文件按旧值参与），且
 - attestor 之间无同组织标记（企业域名 hash 分桶）。
 
 防刷机制：
+- **attestor = GitHub 账号**（token 派生）：入库凭据要求 attestor 与发件
+  issue 作者强一致（bot 五道门之⑤），anonymous 凭据不入树——伪冒身份面焊死。
 - attestor 信誉分：新账号的 attestation 权重 0.3，随历史记录被交叉印证而上升；
   被发现虚假记录 → 信誉清零并回溯削权其全部历史记录。
 - 认证流水线核算 maturity 时只认加权和，权重规则开源、可复算（S10：不接受手工声明）。

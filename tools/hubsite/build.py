@@ -145,7 +145,7 @@ def _att_html(skill_dir):
         sigshow = "✔ " + sig.split(":")[0] if sig and sig != "UNSIGNED-TODO" else "未签名"
         rows.append(f'<tr><td>{_esc(a.stem[:10])}</td><td>{_esc(att.get("outcome"))}</td>'
                     f'<td>{_esc(att.get("mode"))}</td>'
-                    f'<td>{_esc(os_.get("family"))} {_esc(os_.get("version_bucket"))} / {_esc(env.get("scale_bucket"))}</td>'
+                    f'<td>{_esc(os_.get("family"))} {_esc(os_.get("version_bucket"))} / {_esc(env.get("arch"))}</td>'
                     f'<td>{"✔" if att.get("rollback_exercised") else "—"}</td><td class="pill">{_esc(sigshow)}</td></tr>')
     rows.append('</table>')
     return "\n".join(rows)

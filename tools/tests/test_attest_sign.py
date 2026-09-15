@@ -15,7 +15,7 @@ def _load(tmp_home):
 def _att():
     return {"skill": "host.x", "skill_version": "0.1.0", "outcome": "resolved",
             "mode": "navigator", "env_fingerprint": {"os": {"family": "rhel", "version_bucket": "8.x"},
-            "scale_bucket": "1-10 hosts"}, "rollback_exercised": True, "attestor": "gh:t"}
+            "arch": "x86_64"}, "rollback_exercised": True, "attestor": "gh:t"}
 
 
 def test_sign_verify_roundtrip(tmp_path):
