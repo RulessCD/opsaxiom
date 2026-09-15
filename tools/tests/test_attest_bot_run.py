@@ -23,10 +23,10 @@ def _mk_registry(tmp_path):
     return reg
 
 
-def _mk_issue(num, author, att_yaml):
+def _mk_issue(num, author, att_yaml, created="2026-09-15T11:30:49Z"):
     return {"number": num, "title": "attest: host.x resolved",
             "body": f"automatic attestation.\n\n```yaml\n{att_yaml}\n```\n",
-            "author": {"login": author}}
+            "author": {"login": author}, "createdAt": created}
 
 
 def _signed_att(attestor="alice", skill="host.x", monkey=None):
@@ -83,9 +83,10 @@ def test_full_batch_accept_close_rebuild(gh_env):
     state["issues"] = [_mk_issue(1, "alice", _signed_att())]
     monkey = None
     BR.main()
-    # 落树
+    # 落树：文件名日期取自 issue createdAt（凭据本体无日期字段）
     files = list((reg / "skills" / "host.x" / "0.1.0" / "attestations").glob("*.yaml"))
     assert len(files) == 1
+    assert files[0].name.startswith("2026-09-15-")
     att = yaml.safe_load(files[0].read_text())
     assert att["attestor"] == "alice"
     # index 重建
@@ -122,3 +123,15 @@ def test_no_yaml_block_rejected(gh_env):
     BR.main()
     flat = [a for c in calls for a in c]
     assert "attest:rejected" in flat
+
+
+def test_issue_date_fallback_when_missing(gh_env):
+    """issue 无 createdAt（异常数据）→ 落树文件名回退 0000-00-00，不炸。"""
+    reg, calls, state = gh_env
+    issue = _mk_issue(5, "alice", _signed_att())
+    del issue["createdAt"]
+    state["issues"] = [issue]
+    BR.main()
+    files = list((reg / "skills" / "host.x" / "0.1.0" / "attestations").glob("*.yaml"))
+    assert len(files) == 1
+    assert files[0].name.startswith("0000-00-00-")

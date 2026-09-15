@@ -18,9 +18,11 @@ import yaml
 FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-([0-9a-f]{8})\.yaml$")
 
 
-def check_one(att, *, issue_author, dest_dir):
+def check_one(att, *, issue_author, dest_dir, issue_date=None):
     """校验一条凭据。返回 (status, path_or_reason)：
-    status ∈ {"accept", "skip", "reject"}；accept/skip 时带目标文件名。"""
+    status ∈ {"accept", "skip", "reject"}；accept/skip 时带目标文件名。
+    issue_date：issue 侧日期（YYYY-MM-DD）——凭据无日期字段（日期只编在
+    文件名里），bot 从 issue 带入让落树文件名可读；缺省 0000-00-00。"""
     import validate
     av = validate._att_validator()
     if av is not None and av is not False:
@@ -39,7 +41,7 @@ def check_one(att, *, issue_author, dest_dir):
 
     # 文件名按与 opsaxiom-attest 同一规则重建（日期 + 内容哈希前 8 位）
     import hashlib
-    date = _date_of(att)
+    date = _date_of(att, issue_date)
     h = hashlib.sha256(yaml.dump(att, sort_keys=True).encode()).hexdigest()[:8]
     fname = f"{date}-{h}.yaml" if date else f"0000-00-00-{h}.yaml"
     if not FILE_RE.match(fname):
@@ -60,10 +62,10 @@ def check_one(att, *, issue_author, dest_dir):
     return "accept", fname
 
 
-def _date_of(att):
+def _date_of(att, issue_date=None):
     """凭据无日期字段（日期只编在文件名里）——bot 场景从 issue 侧带入；
     bundle 场景由导出侧在包装层记录。缺省 0000-00-00 仍可入库（哈希去重不受影响）。"""
-    return att.get("_export_date") or "0000-00-00"
+    return att.get("_export_date") or issue_date or "0000-00-00"
 
 
 def cross_check_author(att, issue_author):

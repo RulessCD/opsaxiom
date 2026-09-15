@@ -81,13 +81,16 @@ def main():
 
     repo = os.environ["GITHUB_REPOSITORY"]
     issues = json.loads(gh("issue", "list", "--state", "open",
-                           "--label", LABEL_IN, "--json", "number,title,body,author",
+                           "--label", LABEL_IN,
+                           "--json", "number,title,body,author,createdAt",
                            "-L", "200").stdout)
     accepted = rejected = skipped = 0
     changed = False
 
     for it in issues:
         num, author, body = it["number"], it["author"]["login"], it.get("body") or ""
+        # issue 创建日期（YYYY-MM-DD）：凭据无日期字段，落树文件名从 issue 侧补
+        issue_date = (it.get("createdAt") or "")[:10]
         atts = parse_yaml_blocks(body)
         if not atts:
             gh("issue", "comment", str(num), "-b",
@@ -103,7 +106,8 @@ def main():
             sid = att.get("skill", "?")
             sver = att.get("skill_version", "?")
             d, exists = dest_dir_for(sid, sver, reg)
-            st, info = AB.check_one(att, issue_author=author, dest_dir=d)
+            st, info = AB.check_one(att, issue_author=author, dest_dir=d,
+                                    issue_date=issue_date)
             if st == "accept":
                 (d / info).write_text(
                     yaml.safe_dump(att, allow_unicode=True, sort_keys=False),
