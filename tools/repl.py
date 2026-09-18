@@ -104,26 +104,26 @@ class Repl:
         print("1. 问题诊断：")
         print("     <直接描述症状>  匹配 skills 并执行")
         print("     run <id>         执行指定 skill")
-        print("2. 技能资产：")
-        print("     list [域]        查看全部 skills，可后缀指定域")
+        print("2. 可用技能：")
+        print("     list              查看全部 skills")
         print("     search <关键词>   搜索 skills")
         print("     info <id>        查看指定 skill 详情")
         print("     sync             手动同步社区 Skill（系统 24h 自动）")
-        print("3. 配置设置：")
+        print("3. 环境配置：")
         print("     doctor           环境自检")
         print("     update           自更新：代码→依赖→Skill 库→自检")
-        print("     overlay <id>     为指定 skill 生成个人叠加层")
+        print("     overlay <id>     为技能挂接参数或笔记")
         print("     model            配置大模型")
-        print("     target           接入设备管理")
+        print("     target           待运维资产管理")
         print("     cred             本地凭证管理")
         print("     auth             GitHub 个人 token（社区贡献用）")
         print("4. 社区贡献：")
         print("     sug              异常提报（向社区提 issue）")
         print("     new              从零创建 skill 草稿")
-        print("     fork             从已有 skill 派生修改")
+        print("     fork             从已有技能复制并修改")
         print("     edit             编辑草稿")
-        print("     promote          本地仿真验证")
-        print("     push             推送 PR 至社区")
+        print("     promote          验证草稿（通过后即可推送）")
+        print("     push             推送提交社区")
         if not self.idx:
             print("  🟡 尚未同步 Skill 库，请先执行 hub sync 获取可用 Skill。")
 
@@ -135,7 +135,7 @@ class Repl:
                 print("  ⚠ 本机 Skill 库为空，请先执行 hub sync 拉取社区 Skill。")
                 return
             print("  ⚠ 库内未找到相关 Skill。您可以：")
-            print("    · 重新描述报错/现象，尝试再次匹配")
+            print("    · 换种方式描述您遇到的问题")
             print("    · 上报技能缺失，输入：sug \"您遇到的问题\"")
             print("    · 查看并手动检索全部 Skills，输入：list")
             return
@@ -220,8 +220,8 @@ class Repl:
             declared = [p.get("os") for p in s.get("metadata", {}).get("platforms", []) or []
                         if p.get("os")]
             declared_str = "/".join(declared) if declared else "特定平台"
-            print(f"  ⚠ 该 Skill 声明适用于 {declared_str}，本机是 {local_os}，无法在本机诊断。")
-            print("  如需诊断其他环境的机器，请切换目标为非本机（手动/远程）。")
+            print(f"  ⚠ 该技能适用于 {declared_str}，本机是 {local_os}，无法在本机诊断。"
+                  "如需诊断其他环境的设备，请切换目标。")
             return
         io = runtime.IO(answers=None, echo=True)
         # F-14：resume 必须用状态文件的真实 sid（可能来自子命令/自定义 --sid），
@@ -267,13 +267,13 @@ class Repl:
                 except gate.GateRemoteNotAllowed as e:
                     raise runtime.RemoteNotAllowed(str(e)) from e
             remote_runner = _routed_remote
-            mode_label = "协驾档（远程自动执行）"
+            mode_label = "远程执行模式（自动在目标上跑命令）"
         elif self.target_mode == "manual":
             remote_runner = None
-            mode_label = "导航档（你敲命令，Agent 只出方案与判读）"
+            mode_label = "指引模式（我只出分析结论和方案，动手由你亲自来）"
         else:
             remote_runner = None
-            mode_label = "导航档（你敲命令，Agent 只出方案与判读）"
+            mode_label = "指引模式（我只出分析结论和方案，动手由你亲自来）"
 
         sess = runtime.Session(p, params=params, mode="guided", io=io, sid=session_id,
                                remote_runner=remote_runner)
@@ -287,16 +287,16 @@ class Repl:
         try:
             res = sess.run(start=start)
         except KeyboardInterrupt:
-            print("\n  ⏸ 已中断本次排查（进度已存）。输入 resume 可续跑，或继续描述别的问题。")
+            print("\n  ⏸ 已中断本次诊断（进度已存）。输入 resume 可继续，或继续描述别的问题。")
             return
         if res["outcome"] == "quit":
-            print("  已退出本次排查（进度已存，输入 resume 续跑）。")
+            print("  已退出本次诊断（进度已存，输入 resume 继续）。")
 
     def _resume_pick(self):
         sd = _home() / "sessions"
         states = sorted(sd.glob("*.state.json")) if sd.is_dir() else []
         if not states:
-            print("  没有可续跑的排查。")
+            print("  没有可继续的诊断。")
             return
         import json
         print("  可续跑的排查：")
@@ -707,7 +707,7 @@ class Repl:
             '  taxonomy: host/storage/capacity/disk-full\n'
             '  version: 0.1.0\n  maturity: draft\n'
             '  platforms: [{os: linux}]\n'
-            '  params: [{name: mount, source: alert, desc: 告警指向的挂载点}]\n'
+            '  params: [{name: mount, source: alert, desc: 需要排查的具体目录（格式如：/、/var、/data）}]\n'
             'requirements: {capability_level: high_risk_write, connectors: [ssh]}\n'
             'tree:\n  entry: locate_mount\n  nodes:\n'
             '  - id: locate_mount\n    type: check\n'
@@ -753,7 +753,7 @@ class Repl:
         return prompt
 
     def _show_hypotheses(self, inc):
-        print(f"  假设 {len(inc.hyps)} 个（按相关度）：")
+        print(f"  经检索匹配，技能库中存在以下{len(inc.hyps)}个经过验证的排查方法：")
         for i, h in enumerate(inc.hyps, 1):
             print(f"  {i}) [{h.badge}] {h.name}       {h.meta['id']}")
         print("  → 输入序号进入对应 Skill 逐步排查；回车则批量取证。")
@@ -922,11 +922,8 @@ class Repl:
                     continue
                 if name in params and params[name]:
                     continue
-                desc = prm.get("desc", "")
-                if desc:
-                    prompt = f"  需提供 {name}（{desc}）："
-                else:
-                    prompt = f"  {name}："
+                desc = (prm.get("desc") or "").strip()
+                prompt = f"  {desc}：" if desc else "  请补充该项信息："
                 try:
                     v = input(prompt).strip()
                 except (EOFError, KeyboardInterrupt):
@@ -1163,10 +1160,10 @@ class Repl:
         try:
             res = sess.run()
         except KeyboardInterrupt:
-            print("\n  ⏸ 已中断本次处置（进度已存）。输入 resume 可续跑。")
+            print("\n  ⏸ 已中断本次处置（进度已存）。输入 resume 可继续。")
             return
         if res["outcome"] == "quit":
-            print("  已退出本次处置（进度已存，输入 resume 续跑）。")
+            print("  已退出本次处置（进度已存，输入 resume 继续）。")
 
     # ---------- 远程取证 ----------
     _wl_notice_shown = None          # 白名单档提示每目标只打一次（execute_mixed 每探针查授权）

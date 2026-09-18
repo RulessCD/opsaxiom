@@ -41,7 +41,7 @@ def _cmd_hub(args):
         print(f"  门①校验：0 ERROR  门②验签：{rep['att_valid']} 有效 / {rep['att_trusted']} 可信"
               f"  门③徽章：{rep['maturity']}")
         if rep["att_trusted"] == 0 and rep["att_valid"] > 0:
-            print("  ⚠ 签名有效但签名者不在 keyring（TOFU）——建立信任前谨慎用于自动化档位。")
+            print("  ⚠ 签名有效但签名者尚未加入信任列表——建立信任前谨慎用于自动执行模式。")
         return 0
     if sub == "push":
         tar = hubtool.hub_push(args.id)
@@ -83,7 +83,7 @@ def _cmd_keyring(args):
 def add_hub(subparsers):
     hp = subparsers.add_parser("hub", help="Skills Hub：拉取/发布可信 Skill")
     hs = hp.add_subparsers(dest="hub_cmd", required=True)
-    i = hs.add_parser("init", help="配置 registry（本地目录或 git 地址）")
+    i = hs.add_parser("init", help="配置技能库来源（本地目录或 git 地址）")
     i.add_argument("location")
     b = hs.add_parser("build-registry", help="从 skills/ 生成一个 registry")
     b.add_argument("skills")
@@ -91,11 +91,11 @@ def add_hub(subparsers):
     b.add_argument("--no-draft", dest="no_draft", action="store_true",
                    help="过滤 draft（对外发布用，与收录政策一致）")
     hs.add_parser("sync", help="同步 registry 索引")
-    se = hs.add_parser("search", help="搜索 registry")
+    se = hs.add_parser("search", help="搜索社区技能库")
     se.add_argument("kw")
-    pl = hs.add_parser("pull", help="拉取一个 Skill（三道安全门）")
+    pl = hs.add_parser("pull", help="安装一个技能（含安全校验）")
     pl.add_argument("id")
-    pl.add_argument("--allow-draft", action="store_true", help="放开 draft 拒收门")
+    pl.add_argument("--allow-draft", action="store_true", help="允许安装未验证的草稿版本")
     pu = hs.add_parser("push", help="打包一个 Skill 为 bundle")
     pu.add_argument("id")
     kr = hs.add_parser("keyring", help="管理信任的签名者公钥")

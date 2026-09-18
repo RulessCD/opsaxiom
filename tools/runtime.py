@@ -333,7 +333,7 @@ class Session:
         self.io._p(f"\n━━ [变更] {self.r(n.get('title',''))} ━━  风险: {risk}")
         pf = n.get("preflight")
         if pf:
-            self.io._p("📋 变更简报（Pre-flight Brief）")
+            self.io._p("📋 变更影响说明")
             self.io._p(f"  影响面: {self.r(pf.get('blast_radius',''))}")
             if pf.get("est_downtime"):
                 self.io._p(f"  预估停机: {self.r(pf['est_downtime'])}")
@@ -356,7 +356,7 @@ class Session:
         self._cautions(n)
         if n.get("human_only"):
             self.io._p("  ⛔ human_only：此步骤 Agent 任何档位都不执行，仅出指导。")
-        decision = self.io.action_decision(n["id"], "需要审批。你的决定？")
+        decision = self.io.action_decision(n["id"], "确认执行此变更？")
         if decision != "proceed":
             self._log(n["id"], "action", risk=risk, decision=decision)
             if decision == "skip":

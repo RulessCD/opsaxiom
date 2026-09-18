@@ -53,12 +53,12 @@ def run(in_repl=False):
     # --- 推荐 ---
     crypto = _check_import("cryptography")
     rows.append((OK if crypto else WARN, "cryptography (Ed25519)",
-                 "已装" if crypto else "缺失→attest 降级 HMAC(不可跨主体验证)"))
+                 "已装" if crypto else "缺失→签名将使用本地校验模式（仍可用，但不能被社区独立验证）"))
     for mod in ("pytest", "ntc_templates", "paramiko"):
         ok = _check_import(mod)
         if mod == "paramiko":
             rows.append((OK if ok else WARN, f"可选 {mod}",
-                         "已装" if ok else "未装(远程 SSH/网络设备自动执行不可用，降级人工贴回)"))
+                         "已装" if ok else "未装→远程自动执行不可用，需人工在设备上跑命令并贴回结果"))
         else:
             rows.append((OK if ok else WARN, f"可选 {mod}", "已装" if ok else "未装(部分功能受限)"))
 
@@ -67,7 +67,7 @@ def run(in_repl=False):
                       ("redis-cli", "middleware/redis")]:
         present = shutil.which(tool) is not None
         rows.append((OK if present else WARN, f"连接器 {tool}",
-                     "在 PATH" if present else f"未找到(影响 {dom} 域真实执行，导航档不受影响)"))
+                     "在 PATH" if present else f"未找到→{dom} 相关技能智能诊断受限，指引模式不受影响"))
 
     # 1Password CLI
     op_present = shutil.which("op") is not None

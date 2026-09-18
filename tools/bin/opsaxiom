@@ -70,7 +70,7 @@ def cmd_run(args):
         print(f"OpsAxiom · {meta['name']}  [{_badge(meta['maturity'])}]  ⏪ 续跑，从节点 {start} 恢复")
     else:
         print(f"OpsAxiom · {meta['name']}  [{_badge(meta['maturity'])}]  模式={sess.mode}")
-        print(f"（导航档：Agent 只出方案与变更简报，写操作由你亲自执行）")
+        print(f"（指引模式：Agent 只出方案与变更简报，写操作由你亲自执行）")
     res = sess.run(start=start)
     print(f"\n审计已记录：{res['audit_file']}")
     if res["outcome"] == "quit":
@@ -81,13 +81,13 @@ def cmd_run(args):
 def main():
     ap = argparse.ArgumentParser(prog="opsaxiom")
     sub = ap.add_subparsers(dest="cmd")          # W-1：无子命令→进 REPL
-    rp = sub.add_parser("run", help="走一个 Skill 的决策树")
+    rp = sub.add_parser("run", help="按诊断流程逐步排查")
     rp.add_argument("skill")
     rp.add_argument("--param", action="append")
     rp.add_argument("--real", action="store_true", help="只读命令自动执行")
-    rp.add_argument("--answers", help="脚本驱动的答案文件")
-    rp.add_argument("--sid", help="会话 id")
-    rp.add_argument("--resume", action="store_true", help="从上次中断处续跑（需配 --sid）")
+    rp.add_argument("--answers", help="预填答复（非交互模式用）")
+    rp.add_argument("--sid", help="会话标识")
+    rp.add_argument("--resume", action="store_true", help="从中断处继续（需配 --sid）")
     rp.set_defaults(fn=cmd_run)
     try:
         from opsaxiom_diagnose import add_diagnose  # T-2

@@ -105,7 +105,7 @@ def cmd_show(args):
     p = llm.config_path()
     print(f"配置文件: {p}  {'(存在)' if p.exists() else '(不存在)'}")
     if cfg is None:
-        print("当前: 未接模型（全走降级：关键词匹配 + 模板叙事——全功能可用）")
+        print("当前: 未接模型（使用关键词匹配——全功能可用）")
     else:
         shown = {k: ("***" if k == "api_key" else v) for k, v in cfg.items()}
         print(f"当前: {shown}")
@@ -125,7 +125,7 @@ def cmd_use(args):
                       api_key=args.api_key, provider=args.provider)
     p = _write_cfg(cfg)
     if args.backend == "off":
-        print(f"已关闭模型（{p}）。系统全功能可用（降级链）。")
+        print(f"已断开模型（{p}）。系统所有功能正常（关键词匹配模式）。")
         return
     print(f"已切到 {args.backend}（{p}）。验证：opsaxiom model test")
     if args.backend == "builtin":

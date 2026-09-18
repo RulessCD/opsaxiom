@@ -49,8 +49,8 @@ def run_incident(symptom, params=None, target="local", top=3,
             # 未授权：不执行，明说差什么（调用方 UI 负责问人，--grant 落授权）
             result["needs_grant"] = True
             result["auto_count"] = plan["auto_count"]
-            result["note"] = ("本机自动取证未授权。确认后带 --grant 重跑"
-                              "（只读命令，均出自已验证 Skill）。")
+            result["note"] = ("本机自动诊断未授权。确认后加上 --grant 重试"
+                              "（只检查不修改，命令均出自已验证技能）。")
             return result
         report = inc.auto_sweep(runner=runner, now=now)
         result["sweep"] = [{"node": r["node"], "status": r["status"]} for r in report]
@@ -64,8 +64,8 @@ def run_incident(symptom, params=None, target="local", top=3,
             block, probes = inc.paste_block(nonce, only_manual=False)
             result["plan"] = {"nonce": nonce, "paste_block": block,
                               "commands": [p["cmd"] for p in probes]}
-            result["note"] = ("远端目标：请人在目标上执行以上命令，"
-                              "输出存文件后用 --ingest-file 回灌。")
+            result["note"] = ("远端设备：请人在设备上执行以上命令，"
+                              "输出存文件后用 --ingest-file 导入分析。")
             return result
 
     inc.dry_run(now=now)
@@ -80,7 +80,7 @@ def run_incident(symptom, params=None, target="local", top=3,
     if treats:
         result["treatment"] = {
             "skills": treats,
-            "how": "处置需人工审批：终端执行 opsaxiom run <id>（变更简报+审批+verify）。"}
+            "how": "修复需人工决策：在终端执行 opsaxiom run <id>（含变更影响说明+确认+校验）。"}
     return result
 
 
@@ -106,7 +106,7 @@ def cmd_incident(args):
 
 
 def add_incident(sub):
-    ap = sub.add_parser("incident", help="取证式诊断一次跑完（机器可读）")
+    ap = sub.add_parser("incident", help="自动诊断：一次完成匹配、取证、卷宗（适合脚本/pi）")
     ap.add_argument("symptom")
     ap.add_argument("--param", action="append", metavar="k=v")
     ap.add_argument("--target", default="local")

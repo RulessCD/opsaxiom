@@ -234,8 +234,8 @@ def _cmd_grant(args):
           f"target revoke {args.name} 可随时收回）")
     if t.get("sudo_whitelist"):
         if t.get("admin_user") or t.get("user") != "opsaxiom-ro":
-            print(f"  该目标已进入 root 档：全部只读命令以 {t.get('admin_user', t.get('user'))}"
-                  f" 直登自动执行（白名单 sudo 路由停用；到期自动退回白名单档）。")
+            print(f"  该设备已获得完整执行权限，所有诊断命令可直接自动运行"
+                  f"（以 {t.get('admin_user', t.get('user'))} 直登，到期自动退回受限模式）。")
         else:
             print("  该目标已授权但无管理账号通道（旧流程开通，无 admin_user）——"
                   "保持白名单档：名单内 sudo 自动、名单外贴回。重跑 target add 可"
@@ -256,8 +256,8 @@ def _cmd_revoke(args):
         print(f"✔ 已收回 {args.name} 的授权。")
         t = targets.get(args.name) or {}
         if t.get("sudo_whitelist"):
-            print("  该目标退回白名单档：名单内命令仍可免密自动执行（ro 账号 sudo），"
-                  "名单外恢复人工贴回。")
+            print("  该设备恢复为受限执行：白名单内的命令可自动运行，白名单外的命令需人工操作。")
+            print(f"  需要全部命令自动执行？target grant {args.name} 切换完整模式。")
     else:
         print(f"{args.name} 本就没有授权，无需收回。")
     return 0
@@ -543,7 +543,7 @@ def _cmd_add(args):
         # 能力边界说清楚，出路说清楚，不留"以为能自动其实不能"的误会
         if conn == "ssh" and (entry.get("os") or "linux").startswith("linux"):
             print("  ⚠ 低权账号与白名单未能建立：")
-            print("    1. 该目标当前仅受 OpsAxiom 客户端约束（只读命令白名单、参数注入防护、全量审计）。")
+            print("    1. 该设备当前受客户端安全策略保护（只读执行、参数过滤、操作留痕）。")
             print("    2. 探针只能人工执行并贴回结果；用 target grant 可授权全自动（管理账号直登）。")
             print("    3. 修复环境后重跑 target add 可重试建立白名单档。")
         else:
