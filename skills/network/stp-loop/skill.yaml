@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: vlan_id, source: user, desc: 疑似环路 VLAN}
+    - {name: vlan_id, source: user, desc: 请输入疑似环路的 VLAN 编号（如 100）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

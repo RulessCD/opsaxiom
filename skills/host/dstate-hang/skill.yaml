@@ -13,7 +13,7 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: pids, source: alert}
+  - {name: pids, source: alert, desc: 请输入卡住的进程号，多个用空格分隔（如 1234 5678）}
 requirements:
   capability_level: read
   connectors: [ssh]

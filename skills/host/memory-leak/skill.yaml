@@ -13,7 +13,7 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: available_pct, source: alert}
+  - {name: available_pct, source: alert, desc: 请输入期望的最低可用内存百分比（如 10 表示低于 10% 时告警）}
 requirements:
   capability_level: read
   connectors: [ssh]

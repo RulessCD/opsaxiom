@@ -18,7 +18,7 @@ metadata:
   params:
   - name: endpoint
     source: alert
-    desc: 待检测的 host:port，如 example.com:443
+    desc: 请输入待检测的地址和端口（如 example.com:443）
   expires_review: '2027-07-01'
 requirements:
   capability_level: read

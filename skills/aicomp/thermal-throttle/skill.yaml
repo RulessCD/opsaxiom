@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{accelerator: nvidia}]
   params:
-    - {name: host, source: alert, desc: 节点}
-    - {name: gpu_id, source: alert, desc: GPU 序号}
+    - {name: host, source: alert, desc: 请输入需要排查的节点地址}
+    - {name: gpu_id, source: alert, desc: 请输入限频的 GPU 序号（如 0）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

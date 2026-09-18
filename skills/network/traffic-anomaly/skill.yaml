@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: intf, source: alert, desc: 告警接口}
+    - {name: intf, source: alert, desc: 请输入告警指向的网口名（如 eth0）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

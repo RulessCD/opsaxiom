@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{engine: mysql, versions: ">=8.0"}]
   params:
-    - {name: dsn, source: user, desc: 实例连接串}
+    - {name: dsn, source: user, desc: 请输入数据库连接串（格式如 mysql://user@host:3306/db，可不带密码）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

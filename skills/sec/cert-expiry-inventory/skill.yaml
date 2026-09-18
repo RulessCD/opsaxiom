@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{scope: pki}]
   params:
-    - {name: inventory, source: user, desc: 证书清单/端点列表文件}
+    - {name: inventory, source: user, desc: 请输入证书清单文件路径（每行一个域名或 host:port）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

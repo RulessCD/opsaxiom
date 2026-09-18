@@ -13,9 +13,9 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: days_left, source: alert}
-  - {name: endpoint, source: alert}
-  - {name: sni, source: user}
+  - {name: days_left, source: alert, desc: 请输入希望至少剩余的天数（如 30）}
+  - {name: endpoint, source: alert, desc: 请输入待检测的地址和端口（如 example.com:443）}
+  - {name: sni, source: user, desc: 请输入 TLS 握手使用的域名（默认与地址相同，可直接回车）}
 requirements:
   capability_level: read
   connectors: [ssh]

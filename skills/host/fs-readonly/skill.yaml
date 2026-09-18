@@ -13,8 +13,8 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: device, source: alert}
-  - {name: mount, source: alert}
+  - {name: device, source: alert, desc: 请输入出问题的磁盘分区设备（如 /dev/sda1）}
+  - {name: mount, source: alert, desc: 请输入需要排查的具体目录（格式如：/、/var、/data）}
 requirements:
   capability_level: high_risk_write
   connectors: [ssh]

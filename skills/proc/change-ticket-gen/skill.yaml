@@ -8,10 +8,10 @@ metadata:
   maturity: sim_verified
   platforms: [{scope: process}]
   params:
-    - {name: change_desc, source: user, desc: 变更内容}
-    - {name: blast_radius, source: user, desc: 影响面}
-    - {name: rollback_plan, source: user, desc: 回滚方案}
-    - {name: window, source: user, desc: 变更窗口}
+    - {name: change_desc, source: user, desc: 请描述本次变更内容（做什么、为什么做）}
+    - {name: blast_radius, source: user, desc: 请描述变更影响面（涉及哪些系统/多少用户）}
+    - {name: rollback_plan, source: user, desc: 请描述回滚方案（出问题怎么退回）}
+    - {name: window, source: user, desc: 请输入变更窗口时间（如 2026-09-20 02:00-04:00）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

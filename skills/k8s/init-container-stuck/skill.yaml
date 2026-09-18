@@ -18,10 +18,10 @@ metadata:
   params:
   - name: ns
     source: alert
-    desc: 命名空间
+    desc: 请输入命名空间（如 default）
   - name: pod
     source: alert
-    desc: Pod 名
+    desc: 请输入初始化容器卡住的 Pod 名
   expires_review: '2027-07-01'
 requirements:
   capability_level: read

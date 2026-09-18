@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{stack: prometheus}]
   params:
-    - {name: prom_url, source: user, desc: Prometheus 地址}
-    - {name: target, source: alert, desc: down 的 target 实例}
+    - {name: prom_url, source: user, desc: 请输入 Prometheus 地址（格式如 http://prom:9090）}
+    - {name: target, source: alert, desc: 请输入显示 down 的实例（格式如 10.0.0.5:9100）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

@@ -13,8 +13,8 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: deploy, source: alert}
-  - {name: ns, source: alert}
+  - {name: deploy, source: alert, desc: 请输入发布卡住的应用（Deployment）名 }
+  - {name: ns, source: alert, desc: 请输入命名空间（如 default）}
 requirements:
   capability_level: read
   connectors: [kubectl]

@@ -8,9 +8,9 @@ metadata:
   maturity: sim_verified
   platforms: [{scope: process}]
   params:
-    - {name: open_incidents, source: user, desc: 未闭环故障/工单}
-    - {name: watch_items, source: user, desc: 需持续观察项}
-    - {name: pending_changes, source: user, desc: 待执行/进行中变更}
+    - {name: open_incidents, source: user, desc: 请输入未闭环的故障/工单清单（编号或一句话一项）}
+    - {name: watch_items, source: user, desc: 请输入需要持续观察的事项}
+    - {name: pending_changes, source: user, desc: 请输入待执行/进行中的变更清单}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

@@ -8,10 +8,10 @@ metadata:
   maturity: sim_verified
   platforms: [{scope: process}]
   params:
-    - {name: incident_summary, source: user, desc: 故障一句话概述}
-    - {name: impact, source: user, desc: 影响范围与时长}
-    - {name: root_cause, source: user, desc: 根因（已知则填）}
-    - {name: timeline_ref, source: user, desc: 时间线来源/链接}
+    - {name: incident_summary, source: user, desc: 请用一句话概述本次故障}
+    - {name: impact, source: user, desc: 请描述影响范围与时长（哪些业务、多久恢复）}
+    - {name: root_cause, source: user, desc: 请输入已知的根因（尚未定位可直接回车）}
+    - {name: timeline_ref, source: user, desc: 请输入时间线来源（聊天记录链接/工单号/文档路径）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

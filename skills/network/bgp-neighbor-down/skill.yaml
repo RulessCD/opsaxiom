@@ -18,7 +18,7 @@ metadata:
   authors: [opsagent-core]
   license: Apache-2.0
   params:
-    - {name: peer_ip, source: alert, desc: 告警指向的 BGP 邻居地址}
+    - {name: peer_ip, source: alert, desc: 请输入告警指向的 BGP 邻居地址（如 10.0.0.1）}
     - {name: update_source, source: derived, desc: 本端 BGP update-source 地址(引擎从会话配置推断)}
     - {name: intf, source: derived, desc: 到邻居的出接口(由可达性/路由推断)}
   provenance:

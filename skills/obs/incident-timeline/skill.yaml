@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{stack: prometheus}]
   params:
-    - {name: prom_url, source: user, desc: Prometheus/事件源地址}
-    - {name: window, source: user, desc: 事件时间窗(如 -2h..now)}
+    - {name: prom_url, source: user, desc: 请输入 Prometheus 或事件源地址（格式如 http://prom:9090）}
+    - {name: window, source: user, desc: 请输入事件时间范围（如 -2h..now 表示最近 2 小时）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

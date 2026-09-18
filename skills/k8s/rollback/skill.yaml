@@ -13,9 +13,9 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: deploy, source: alert}
-  - {name: ns, source: alert}
-  - {name: target_revision, source: alert}
+  - {name: deploy, source: alert, desc: 请输入要回滚的应用（Deployment）名 }
+  - {name: ns, source: alert, desc: 请输入命名空间（如 default）}
+  - {name: target_revision, source: alert, desc: 请输入要回到的版本号（如 3 表示第 3 次历史版本），不确定可直接回车 }
 requirements:
   capability_level: high_risk_write
   connectors: [kubectl]

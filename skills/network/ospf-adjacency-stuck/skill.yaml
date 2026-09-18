@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: neighbor, source: alert, desc: OSPF 邻居}
+    - {name: neighbor, source: alert, desc: 请输入 OSPF 邻居的地址（如 10.0.0.2）}
     - {name: intf, source: derived, desc: 邻接接口}
   authors: [opsagent-core]
   license: Apache-2.0

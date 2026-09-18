@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{stack: prometheus}]
   params:
-    - {name: am_url, source: user, desc: Alertmanager 地址}
+    - {name: am_url, source: user, desc: 请输入 Alertmanager 地址（格式如 http://am.monitor:9093）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

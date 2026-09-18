@@ -13,7 +13,7 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: pid, source: alert}
+  - {name: pid, source: alert, desc: 请输入要检查的进程号（如 1234）}
 requirements:
   capability_level: read
   connectors: [ssh]

@@ -13,7 +13,7 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: domain, source: alert}
+  - {name: domain, source: alert, desc: 请输入解析失败的域名（如 api.example.com）}
 requirements:
   capability_level: read
   connectors: [ssh]

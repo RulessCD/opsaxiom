@@ -14,7 +14,7 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: unit, source: alert}
+  - {name: unit, source: alert, desc: 请输入失败的服务名（如 nginx.service）}
 requirements:
   capability_level: low_risk_write
   connectors: [ssh]

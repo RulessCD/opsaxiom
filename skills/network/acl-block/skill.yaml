@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: intf, source: alert, desc: 涉及接口}
-    - {name: flow, source: user, desc: 被拦流量的五元组描述}
+    - {name: intf, source: alert, desc: 请输入涉及的接口名（如 eth0、ae0）}
+    - {name: flow, source: user, desc: 请描述被拦流量（五元组：源IP、源端口、目的IP、目的端口、协议，如 10.1.1.5 12345 10.2.2.8 443 tcp）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

@@ -17,7 +17,7 @@ metadata:
   authors: [opsagent-core]
   license: Apache-2.0
   params:
-    - {name: mount, source: alert, desc: 告警指向的挂载点，如 /、/var、/data}
+    - {name: mount, source: alert, desc: 请输入需要排查的具体目录（格式如：/、/var、/data）}
     - {name: svc, source: derived, desc: 持有已删除文件的服务(由 check_deleted_open 推断)}
     - {name: human_size, source: derived, desc: 已删除但被占用的可读大小}
   provenance:

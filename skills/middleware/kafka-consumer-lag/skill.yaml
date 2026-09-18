@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{engine: kafka}]
   params:
-    - {name: broker, source: user, desc: bootstrap-server}
-    - {name: group, source: alert, desc: 消费组}
+    - {name: broker, source: user, desc: 请输入 Kafka 服务地址（格式如 broker1:9092）}
+    - {name: group, source: alert, desc: 请输入消费组名称}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

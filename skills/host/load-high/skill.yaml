@@ -13,7 +13,7 @@ metadata:
   provenance: {generated_by: claude-opus-4-8}
   expires_review: '2027-07-01'
   params:
-  - {name: load1, source: alert}
+  - {name: load1, source: alert, desc: 请输入期望的最高负载阈值（1 分钟均值，如 8）}
 requirements:
   capability_level: read
   connectors: [ssh]

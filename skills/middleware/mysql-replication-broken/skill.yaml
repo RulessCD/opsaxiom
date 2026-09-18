@@ -9,7 +9,7 @@ metadata:
   platforms:
   - {engine: mysql, versions: '>=8.0'}
   params:
-  - {name: dsn, source: user, desc: 从库连接串}
+  - {name: dsn, source: user, desc: 请输入从库连接串（格式如 mysql://repl@host:3306/）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

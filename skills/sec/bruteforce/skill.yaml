@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{os: linux}]
   params:
-    - {name: host, source: alert, desc: 节点}
-    - {name: window, source: user, desc: 排查时间窗}
+    - {name: host, source: alert, desc: 请输入需要排查的主机地址}
+    - {name: window, source: user, desc: 请输入排查的时间范围（如 -24h..now 表示最近 24 小时）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

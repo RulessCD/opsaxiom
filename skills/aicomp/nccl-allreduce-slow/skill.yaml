@@ -9,9 +9,9 @@ metadata:
   platforms:
   - {stack: nccl}
   params:
-  - {name: host, source: user, desc: 节点}
-  - {name: expected_busbw, source: user, desc: 期望 busbw(GB/s)}
-  - {name: ngpus, source: user, desc: 参与的 GPU 数}
+  - {name: host, source: user, desc: 请输入需要排查的节点地址}
+  - {name: expected_busbw, source: user, desc: 请输入期望的 busbw（GB/s，如 180）}
+  - {name: ngpus, source: user, desc: 请输入参与通信的 GPU 数（如 8）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

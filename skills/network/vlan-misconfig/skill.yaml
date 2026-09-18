@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: vlan_id, source: alert, desc: 涉及的 VLAN}
-    - {name: intf, source: user, desc: 上行/接入接口}
+    - {name: vlan_id, source: alert, desc: 请输入涉及的 VLAN 编号（如 100）}
+    - {name: intf, source: user, desc: 请输入上行或接入接口名（如 eth0、ge-0/0/1）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

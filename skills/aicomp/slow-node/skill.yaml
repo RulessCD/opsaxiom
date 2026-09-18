@@ -8,7 +8,7 @@ metadata:
   maturity: sim_verified
   platforms: [{stack: pytorch}]
   params:
-    - {name: job, source: alert, desc: 训练任务}
+    - {name: job, source: alert, desc: 请输入训练任务标识}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

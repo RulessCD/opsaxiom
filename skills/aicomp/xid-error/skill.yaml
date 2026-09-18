@@ -9,8 +9,8 @@ metadata:
   platforms:
   - {accelerator: nvidia}
   params:
-  - {name: host, source: alert, desc: 出错节点}
-  - {name: gpu_id, source: alert, desc: GPU 序号}
+  - {name: host, source: alert, desc: 请输入出错节点地址}
+  - {name: gpu_id, source: alert, desc: 请输入报错的 GPU 序号（如 3）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

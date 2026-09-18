@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: dst, source: alert, desc: 目标地址}
-    - {name: src, source: user, desc: 源地址/出接口}
+    - {name: dst, source: alert, desc: 请输入目标地址（如 10.0.0.5 或某域名）}
+    - {name: src, source: user, desc: 请输入源地址或出接口（如 192.168.1.10、eth0）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}

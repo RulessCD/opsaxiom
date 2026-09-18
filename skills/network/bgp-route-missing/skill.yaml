@@ -8,8 +8,8 @@ metadata:
   maturity: sim_verified
   platforms: [{device: cisco_ios}, {device: huawei_vrp}, {device: junos}]
   params:
-    - {name: peer_ip, source: alert, desc: BGP 邻居}
-    - {name: prefix, source: user, desc: 期望收到的前缀}
+    - {name: peer_ip, source: alert, desc: 请输入 BGP 邻居的地址（如 10.0.0.1）}
+    - {name: prefix, source: user, desc: 请输入期望收到的前缀（如 10.20.0.0/16）}
   authors: [opsagent-core]
   license: Apache-2.0
   provenance: {generated_by: claude-opus-4-8}
