@@ -27,7 +27,7 @@ kubectl，只影响 k8s 域的智能诊断，**导航档（指引模式）不受
 
 ### 离线安装（气隙环境 / 无网络）
 
-前往 [Releases](https://github.com/hf4Academic/opsaxiom-dev/releases) 页面
+前往 [Releases](https://github.com/hf4Academic/opsaxiom/releases) 页面
 下载最新 `opsaxiom-offline-vX.Y.Z.tar.gz`，然后：
 
 ```bash
