@@ -9,8 +9,8 @@
 
 ## 一句话定位
 
-别人是"把大模型接到运维工具上"；我们是把专家经验做成经过仿真与实地双重验证的决策树，
-配上强制回滚、变更简报和社区认证体系。**可回滚是本项目的第一准则。**
+别人是"把大模型接到运维工具上"；我们是把专家经验做成经过仿真与实地双重验证的诊断流程，
+配上强制回滚、变更影响说明和社区认证体系。**可回滚是本项目的第一准则。**
 
 ## 与现有工具的区别
 
@@ -38,7 +38,7 @@
 | `docs/04-taxonomy.md` | 运维知识地图 / 故障分类树 |
 | `docs/05-certification.md` | 社区验证与认证体系 |
 | `skills/` | Skill 库（含 2 个金标准样例） |
-| `docs/09-interaction-v2.md` | 交互模型 v2：取证式诊断（陈述→取证→卷宗→处置→复盘） |
+| `docs/09-interaction-v2.md` | 交互模型 v2：诊断（陈述→诊断→卷宗→处置→复盘） |
 | `tools/pi/opsaxiom.ts` | pi 智能入口扩展（欢迎界面 / `/connect` / axiom_* 工具 / 工具面收窄） |
 | `Dockerfile` + `docker-compose.yml` | 多阶段镜像（core / llm / full 三档重量） |
 | `TODO-opus.md` | 当前执行批次的任务书 |
@@ -46,40 +46,40 @@
 ## 项目状态
 
 - **205 个 Skill**（host 46 / network 38 / middleware 31 / k8s 30 / aicomp 28 / obs 15 / sec 14 / proc 3），
-  **205 个全部 `sim_verified`**（每个都有可复算的仿真证据；含 action 的还通过了回滚往返验证）。
+  **205 个全部 `sim_verified`**（每个都有可重现的仿真证据；含 action 的还通过了回滚往返验证）。
 - 完整工具链：校验器（结构 + 语义 S1–S13 + 投影语义 + 字段契约 + 命令语法树）、
   解析器库、仿真执行器（context_walk + 真实靶机，含 kubectl 只读白名单）、
   **maturity 流水线（sim_verified → field_verified，≥3 份独立签名 attestation）**、
   **Ed25519 签名的 attestation + keyring 治理**。
 - **告警入口（增强渠道）**：`opsaxiom diagnose --json` + `opsaxiom-webhook` 收 Alertmanager
-  告警 → 匹配 Skill → 推钉钉/飞书卡片（只荐不代执行）。
-- **运行时 CLI 已落地（导航档 MVP）**：`opsaxiom diagnose "<症状>"` 匹配 Skill，
-  `opsaxiom run <id>` 逐步指导排查/变更（Agent 只出方案与变更简报，写操作由你亲自执行），
-  支持 `--resume` 断点续跑、变更节点 skip/升级/退出多选。
+  告警 → 匹配 Skill → 推钉钉/飞书卡片（只推荐不代执行）。
+- **运行时 CLI 已落地**：`opsaxiom` 裸敲进交互态，说一遍问题 → 并行多假设、一轮批量诊断
+  （只读命令自动跑/远端一次粘贴）→ 诊断卷宗 → 处置审批 → 复盘导出。
+  导航档（指引模式：只出分析结论和方案，动手由你亲自来）是默认安全基线；
+  协驾档（远程执行模式：自动在目标上跑命令）可通过 `target grant` 按需开启。
+  支持 `--resume` 断点继续、变更节点 skip/升级/退出多选。
 - **人侧飞轮已打通**（docs/08、docs/10）：一键部署（`install.sh`/docker/离线包）+ `doctor` 自检；
-  经验捕获三通道（`skill from-session`/`record`/`skill new`）把日常排查变 Skill 草稿；
-  排查终点一键认证（30 秒签名沉淀）；**Skills Hub**（`hub pull` 三道安全门 / `hub push` / 静态站生成器）。
-- **远程接入**（docs/12，I+B 系列）：`target` 交互式菜单管理设备（list/add/grant/revoke/delete/
+  经验捕获三通道（`skill from-session`/`record`/`skill new`）把日常诊断变 Skill 草稿；
+  诊断终点一键认证（30 秒签名沉淀）；**Skills Hub**（`hub pull` 含安全校验 / `hub push` / 静态站生成器）。
+- **远程接入**（docs/12，I+B 系列）：`target` 交互菜单管理设备（list/add/grant/revoke/delete/
   import-ssh-config/doctor，缺参数自动引导；add 向导含端口/VPN 标签），ssh/网络设备/k8s/http 四连接器。
   **add 一站式开通**（本机密钥检测/生成 → 密码一次上门 → 公钥双装 → ro 账号+sudoers 只读白名单，
-  密码用完即弃不落任何文件）；双档位：**白名单档**（名单内命令 ro 账号免密 sudo 自动执行，
-  名单外转人工贴回）→ `target grant` 升 **root 档**（管理账号直登全量自动，TTL 到期自动退回）。
+  密码用完即弃不落任何文件）；双档位：**白名单档（受限执行：白名单内命令自动跑，名单外需人工操作）**
+  → `target grant` 升 **root 档（完整执行权限：管理账号直登全量自动，TTL 到期自动退回受限模式）**。
   诊断时选"非本机-远程"并挑一台设备：执行门统一把关（per-target 授权 TTL + 只读白名单 +
-  注入防护 + 审计），探针自动远程执行（协驾档），名单外/未授权/不可达降级逐条粘贴，
+  注入防护 + 审计），探针自动远程执行（协驾档/远程执行模式），名单外/未授权/不可达降级逐条粘贴，
   自动执行失败的探针也转人工贴回；`cred set` 本地钥匙串存密码类凭证——**凭证不出本机，
   清单只存引用**；真机（Ubuntu 22.04 SSH）两档端到端验证通过。
 - **本地化 Skill**（docs/13，I 系列）：linkbook 个人网页台账、overlay 叠加层（填 placeholder/贴注记，
   不碰通用树）、fork 派生——**个人层结构性不出门**（打包/CI 拒收，`report --share` 自动剥离 📌 与内网地址）。
-- **默认交互入口是 Terminal REPL，交互模型 v2（取证式诊断）**：裸敲 `opsaxiom` 进交互态，
-  说一遍问题 → 并行多假设、一轮批量取证（只读命令自动跑/远端一次粘贴）→ 诊断卷宗
-  （证实/排除/证据不足，每条带证据引用）→ 处置审批 → 复盘导出。像急诊医生，不像客服问卷
-  （设计见 docs/09）。**可选接模型**只做理解/叙事/建议，永不出命令、不判分支：
+- **可选接模型**（只做理解/叙事/建议，永不出命令、不判分支）：
   内置千问 0.5B（`opsaxiom model pull` 本机离线跑，开箱备用）/ Ollama / OpenAI 兼容
   远程 API / **Pi Agent Harness 多 provider 网关**，`opsaxiom model` 一条命令切换，
-  首启有向导；任一后端不可用自动降级，绝不阻塞排查。
-- 经七轮"Opus 生成 / Fable 对抗评审"迭代，累计沉淀 11+ 条生成规范教训（docs/07）。
+  首启有向导；任一后端不可用自动降级为关键词匹配模式，绝不阻塞诊断。
 
 ## 开箱即用（实测流程）
+
+### 在线安装
 
 **1) 一键安装**（装依赖、软链命令、初始化密钥、自动体检）：
 
@@ -90,7 +90,19 @@ export PATH="$HOME/.local/bin:$PATH"   # 若安装末尾提示 PATH，加这行�
 ```
 
 装完自动跑 `opsaxiom doctor`：🟢 全绿即可用；🟡 只是可选连接器缺失（如本机没装
-kubectl，只影响 k8s 域的真实执行，**导航档不受影响**）。
+kubectl，只影响 k8s 域的智能诊断，**导航档（指引模式）不受影响**）。
+
+### 离线安装（气隙环境 / 无网络）
+
+前往 [Releases](https://github.com/hf4Academic/opsaxiom-dev/releases) 页面
+下载最新 `opsaxiom-offline-vX.Y.Z.tar.gz`，然后：
+
+```bash
+tar xzf opsaxiom-offline-v*.tar.gz && cd opsaxiom-offline-*
+./install.sh --offline
+```
+
+离线包内包含：全部 Skill 库、工具链依赖 wheel、内置小模型，解压即装，无需外网。
 
 **2) 用：敲一个词，然后说人话**
 
@@ -98,21 +110,24 @@ kubectl，只影响 k8s 域的真实执行，**导航档不受影响**）。
 $ opsaxiom
 OpsAxiom v0.1 · 205 个 Skill（205 已验证）· 输入你遇到的问题，或 help 看用法
 axiom> 磁盘满了但 df 显示还有空间 mount=/data
-  假设 3 个（按相关度）：inode 耗尽 / 已删除未释放 / …
-  本机可自动执行 5 条只读取证命令（均出自已验证 Skill）。授权？[y/N]: y
-  ▶ 取证中（本机只读自动执行）… 完成
+  经检索匹配，技能库中存在以下 3 个经过验证的排查方法：
+  [1] host.storage.capacity.disk-full (磁盘空间耗尽诊断与处置)
+  [2] ...
+  → 输入序号进入对应 Skill 逐步诊断；回车则批量诊断。
+  ▶ 诊断中（本机只读自动执行）… 完成
   ── 诊断卷宗 ──────────────────────────────
   ✔ 已证实  磁盘空间耗尽  证据: df -i → rows[0].ipcent = 99  → 待处置：移入隔离区
   ✘ 已排除  已删除未释放  证据: lsof +L1 → 无残留句柄
-  → 处置：run host.storage.capacity.disk-full（进入导航档执行变更）
+  → 处置：run host.storage.capacity.disk-full（进入指引模式执行变更）
 axiom> gpu 掉卡 xid 79        ← 换个域接着问
 axiom> report                 ← 把当前卷宗导出为故障报告（贴工单/转人工）
 axiom> quit
 ```
 
-规矩：**写操作永远由你亲手执行**，它只给方案、变更简报和回滚命令；取证只跑只读命令；
-判读全由机器按解析器字段算，证据不足就明说还差什么。远端设备则给你一整块命令一次贴回。
-中途 Ctrl-C 暂停（进度已存），`resume` 续跑；输候选序号可回到老式逐步排查（兜底）。
+规矩：**写操作永远由你亲手执行**（指引模式），它只给方案、变更影响说明和回滚命令；
+诊断阶段只跑只读命令；判读全由机器按解析器字段算，证据不足就明说还差什么。
+远端设备则给你一整块命令一次贴回。
+中途 Ctrl-C 暂停（进度已存），`resume` 继续；输候选序号可回到老式逐步排查（兜底）。
 
 **3) 脚本/自动化用子命令**：
 
