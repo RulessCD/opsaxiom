@@ -12,71 +12,6 @@
 别人是"把大模型接到运维工具上"；我们是把专家经验做成经过仿真与实地双重验证的诊断流程，
 配上强制回滚、变更影响说明和社区认证体系。**可回滚是本项目的第一准则。**
 
-## 与现有工具的区别
-
-- **HolmesGPT / K8sGPT**：只读诊断、K8s 为主 → 我们覆盖主机/网络设备/智算等全栈，且能安全执行变更
-- **通用 Agent**：临场靠模型现推，换个环境就翻车 → 我们的排查步骤是从你这台机器的真实情况
-  （版本、配置、拓扑）里长出来的；每条命令先核对语法对不对，每个会改动系统的操作都先备好"怎么撤销"
-- **传统 runbook（操作手册）**：一份静态文档 → 我们是一步步执行、每步都验证结果对不对的交互式排查，
-  且每个 Skill 带社区验证徽章（⚪ 没验证 → 🔵 仿真验证过 → 🟢 有人在真机上验证过 → 🟡 官方认证）
-
-## 三种配合方式（你放心到哪一步，就用到哪一步）
-
-1. **它出主意、你动手**：它给排查步骤和改动前的说明，命令你自己敲——不用把任何密码/密钥交给它，最安全
-2. **只读的它自己跑**：查看类命令（不改系统的）它自己执行，要改系统的仍然你来
-3. **改动它也代劳**：连改系统的操作也它来做，但高风险动作会先停下来等你批准
-
-## 仓库导览
-
-| 路径 | 内容 |
-|---|---|
-| `HANDOFF.md` | **模型交接协议与当前状态（接手先读这个）** |
-| `docs/00-golden-rules.md` | 黄金准则（宪法，12 条） |
-| `docs/01-architecture.md` | 核心架构与差异化逻辑层 |
-| `docs/02-rollback-design.md` | 可回滚保证机制 |
-| `docs/03-skill-schema.md` + `schema/` | Skill Schema v0.1（法律层） |
-| `docs/04-taxonomy.md` | 运维知识地图 / 故障分类树 |
-| `docs/05-certification.md` | 社区验证与认证体系 |
-| `skills/` | Skill 库（含 2 个金标准样例） |
-| `docs/09-interaction-v2.md` | 交互模型 v2：诊断（陈述→诊断→卷宗→处置→复盘） |
-| `tools/pi/opsaxiom.ts` | pi 智能入口扩展（欢迎界面 / `/connect` / axiom_* 工具 / 工具面收窄） |
-| `Dockerfile` + `docker-compose.yml` | 多阶段镜像（core / llm / full 三档重量） |
-| `TODO-opus.md` | 当前执行批次的任务书 |
-
-## 项目状态
-
-- **205 个 Skill**（host 46 / network 38 / middleware 31 / k8s 30 / aicomp 28 / obs 15 / sec 14 / proc 3），
-  **205 个全部 `sim_verified`**（每个都有可重现的仿真证据；含 action 的还通过了回滚往返验证）。
-- 完整工具链：校验器（结构 + 语义 S1–S13 + 投影语义 + 字段契约 + 命令语法树）、
-  解析器库、仿真执行器（context_walk + 真实靶机，含 kubectl 只读白名单）、
-  **maturity 流水线（sim_verified → field_verified，≥3 份独立签名 attestation）**、
-  **Ed25519 签名的 attestation + keyring 治理**。
-- **告警入口（增强渠道）**：`opsaxiom diagnose --json` + `opsaxiom-webhook` 收 Alertmanager
-  告警 → 匹配 Skill → 推钉钉/飞书卡片（只推荐不代执行）。
-- **运行时 CLI 已落地**：`opsaxiom` 裸敲进交互态，说一遍问题 → 并行多假设、一轮批量诊断
-  （只读命令自动跑/远端一次粘贴）→ 诊断卷宗 → 处置审批 → 复盘导出。
-  导航档（指引模式：只出分析结论和方案，动手由你亲自来）是默认安全基线；
-  协驾档（远程执行模式：自动在目标上跑命令）可通过 `target grant` 按需开启。
-  支持 `--resume` 断点继续、变更节点 skip/升级/退出多选。
-- **人侧飞轮已打通**（docs/08、docs/10）：一键部署（`install.sh`/docker/离线包）+ `doctor` 自检；
-  经验捕获三通道（`skill from-session`/`record`/`skill new`）把日常诊断变 Skill 草稿；
-  诊断终点一键认证（30 秒签名沉淀）；**Skills Hub**（`hub pull` 含安全校验 / `hub push` / 静态站生成器）。
-- **远程接入**（docs/12，I+B 系列）：`target` 交互菜单管理设备（list/add/grant/revoke/delete/
-  import-ssh-config/doctor，缺参数自动引导；add 向导含端口/VPN 标签），ssh/网络设备/k8s/http 四连接器。
-  **add 一站式开通**（本机密钥检测/生成 → 密码一次上门 → 公钥双装 → ro 账号+sudoers 只读白名单，
-  密码用完即弃不落任何文件）；双档位：**白名单档（受限执行：白名单内命令自动跑，名单外需人工操作）**
-  → `target grant` 升 **root 档（完整执行权限：管理账号直登全量自动，TTL 到期自动退回受限模式）**。
-  诊断时选"非本机-远程"并挑一台设备：执行门统一把关（per-target 授权 TTL + 只读白名单 +
-  注入防护 + 审计），探针自动远程执行（协驾档/远程执行模式），名单外/未授权/不可达降级逐条粘贴，
-  自动执行失败的探针也转人工贴回；`cred set` 本地钥匙串存密码类凭证——**凭证不出本机，
-  清单只存引用**；真机（Ubuntu 22.04 SSH）两档端到端验证通过。
-- **本地化 Skill**（docs/13，I 系列）：linkbook 个人网页台账、overlay 叠加层（填 placeholder/贴注记，
-  不碰通用树）、fork 派生——**个人层结构性不出门**（打包/CI 拒收，`report --share` 自动剥离 📌 与内网地址）。
-- **可选接模型**（只做理解/叙事/建议，永不出命令、不判分支）：
-  内置千问 0.5B（`opsaxiom model pull` 本机离线跑，开箱备用）/ Ollama / OpenAI 兼容
-  远程 API / **Pi Agent Harness 多 provider 网关**，`opsaxiom model` 一条命令切换，
-  首启有向导；任一后端不可用自动降级为关键词匹配模式，绝不阻塞诊断。
-
 ## 开箱即用（实测流程）
 
 ### 在线安装
@@ -141,38 +76,87 @@ opsaxiom run host.storage.capacity.disk-full \
 echo '{"alerts":[{"labels":{"alertname":"GPU 掉卡 XID 79"}}]}' | opsaxiom-webhook --dry-run
 ```
 
+## 三种配合方式（你放心到哪一步，就用到哪一步）
+
+默认开箱即处于**指引模式**（项目内称"导航档"）：只出分析结论和方案，动手由你亲自来，
+不把任何密码/密钥交给它，最安全。如果需要更多自动化：
+
+1. **它出主意、你动手**：指引模式。给诊断步骤和变更影响说明，命令你自己敲
+2. **只读的它自己跑**：查看类命令（不改系统的）白名单内自动执行，要改系统的仍然你来。
+   通过 `target add` 接入设备后开启**受限执行**（项目内称"白名单档"）
+3. **改动它也代劳**：`target grant` 升级到**完整执行权限**（项目内称"root 档"），
+   管理账号直登全量自动执行，但高风险动作会先停下来等你批准。
+   TTL 到期自动退回受限模式
+
+## 与现有工具的区别
+
+- **HolmesGPT / K8sGPT**：只读诊断、K8s 为主 → 我们覆盖主机/网络设备/智算等全栈，且能安全执行变更
+- **通用 Agent**：临场靠模型现推，换个环境就翻车 → 我们的排查步骤是从你这台机器的真实情况
+  （版本、配置、拓扑）里长出来的；每条命令先核对语法对不对，每个会改动系统的操作都先备好"怎么撤销"
+- **传统 runbook（操作手册）**：一份静态文档 → 我们是一步步执行、每步都验证结果对不对的交互式排查，
+  且每个 Skill 带社区验证徽章（⚪ 没验证 → 🔵 仿真验证过 → 🟢 有人在真机上验证过 → 🟡 官方认证）
+
+## 项目状态
+
+- **205 个 Skill**（host 46 / network 38 / middleware 31 / k8s 30 / aicomp 28 / obs 15 / sec 14 / proc 3），
+  **205 个全部 `sim_verified`**（每个都有可重现的仿真证据；含 action 的还通过了回滚往返验证）。
+- 完整工具链：校验器（结构 + 语义 S1–S13 + 投影语义 + 字段契约 + 命令语法树）、
+  解析器库、仿真执行器（context_walk + 真实靶机，含 kubectl 只读白名单）、
+  **maturity 流水线（sim_verified → field_verified，≥3 份独立签名 attestation）**、
+  **Ed25519 签名的 attestation + keyring 治理**。
+- **告警入口**：`opsaxiom diagnose --json` + `opsaxiom-webhook` 收 Alertmanager
+  告警 → 匹配 Skill → 推钉钉/飞书卡片（只推荐不代执行）。
+- **运行时 CLI**：`opsaxiom` 裸敲进交互态，说一遍问题 → 并行多假设、一轮批量诊断
+  （只读命令自动跑/远端一次粘贴）→ 诊断卷宗 → 处置审批 → 复盘导出。
+  支持 `--resume` 断点继续、变更节点 skip/升级/退出多选。
+- **远程接入**（docs/12）：`target` 交互菜单管理设备（list/add/grant/revoke/delete/
+  import-ssh-config/doctor，缺参数自动引导；add 向导含端口/VPN 标签），ssh/网络设备/k8s/http 四连接器。
+  **add 一站式开通**：本机密钥检测/生成 → 密码一次上门 → 公钥双装 → ro 账号+sudoers 只读白名单，
+  密码用完即弃不落任何文件。诊断时选"非本机-远程"并挑一台设备：执行门统一把关（授权 TTL + 只读白名单 +
+  注入防护 + 审计），探针自动远程执行，名单外/未授权/不可达的降级为逐条粘贴人工贴回；
+  `cred set` 本地钥匙串存密码类凭证——**凭证不出本机，清单只存引用**。
+- **本地化 Skill**（docs/13）：linkbook 个人网页台账、overlay 叠加层（填 placeholder/贴注记，
+  不碰通用树）、fork 派生——**个人层结构性不出门**（打包/CI 拒收，`report --share` 自动剥离 📌 与内网地址）。
+- **可选接模型**（只做理解/叙事/建议，永不出命令、不判分支）：
+  内置千问 0.5B（`opsaxiom model pull` 本机离线跑，开箱备用）/ Ollama / OpenAI 兼容
+  远程 API / **Pi Agent Harness 多 provider 网关**，`opsaxiom model` 一条命令切换，
+  首启有向导；任一后端不可用自动降级为关键词匹配模式，绝不阻塞诊断。
+- 一键部署（`install.sh`/docker/离线包）+ `doctor` 自检；经验捕获三通道
+  （`skill from-session`/`record`/`skill new`）把日常诊断变 Skill 草稿；
+  诊断终点一键认证（30 秒签名沉淀）；**Skills Hub**（`hub pull` 含安全校验 / `hub push` / 静态站生成器）。
+
+## 仓库导览
+
+| 路径 | 内容 |
+|---|---|
+| `HANDOFF.md` | **模型交接协议与当前状态（接手先读这个）** |
+| `docs/00-golden-rules.md` | 黄金准则（宪法，12 条） |
+| `docs/01-architecture.md` | 核心架构与差异化逻辑层 |
+| `docs/02-rollback-design.md` | 可回滚保证机制 |
+| `docs/03-skill-schema.md` + `schema/` | Skill Schema v0.1（法律层） |
+| `docs/04-taxonomy.md` | 运维知识地图 / 故障分类树 |
+| `docs/05-certification.md` | 社区验证与认证体系 |
+| `skills/` | Skill 库（含 2 个金标准样例） |
+| `docs/09-interaction-v2.md` | 交互模型 v2：诊断（陈述→诊断→卷宗→处置→复盘） |
+| `tools/pi/opsaxiom.ts` | pi 智能入口扩展 |
+| `Dockerfile` + `docker-compose.yml` | 多阶段镜像（core / llm / full 三档重量） |
+| `TODO-opus.md` | 当前执行批次的任务书 |
+
 ## pi 智能入口（可选升级层）
 
 装了 [Pi Agent Harness](https://pi.dev)（node≥22.19）后，裸敲 `opsaxiom` 会**自动进 pi 智能入口**；
-探测不到 node/pi 就无感回落到上面的 Terminal REPL（气隙/无 node 环境一字不变，导航档零依赖承诺不破）。
-`opsaxiom classic` 可强制老 REPL。
-
-pi 入口是"模型驱动的外壳，OpsAxiom 是法律"：模型能调的只有 `axiom_diagnose`/`axiom_incident`/
-`axiom_report` 三个工具，工具内部全是确定性引擎——**模型永远拿不到出命令、判分支的权力**
-（R7/R9/R10 在工具边界上成立）；写操作仍走 `opsaxiom run` 的审批门。
-
-```
-   ∩      ∩
- (  -    -  )      ◆ OpsAxiom × pi          ← 启动欢迎：卡皮巴拉
- (    ᴥ     )
-axiom 里可用的命令：
-  /connect   接一个模型：选服务商 → 输 API Key → 当场选模型（连接本机 0600 保存，重启恢复）
-             预置 DeepSeek/Claude/OpenAI/Gemini/OpenRouter/阿里百炼/Kimi，
-             或「✎ 自定义」自己填 Base URL / API Key / Model ID（vLLM/内网网关都行）
-  /model     在已接入的模型间切换
-  /axiom     看 Skill 库与模型后端状态
-```
-
-一键装 pi（用国内 npm 镜像）：
+探测不到就无感回落到 Terminal REPL。模型能调的只有 `axiom_diagnose`/`axiom_incident`/
+`axiom_report` 三个工具，工具内部全是确定性引擎——**模型永远拿不到出命令、判分支的权力**；
+写操作仍走指引模式的审批门。
 
 ```bash
-export PATH="$HOME/.local/node22/bin:$PATH"     # 若用便携版 node22
+export PATH="$HOME/.local/node22/bin:$PATH"
 npm install --prefix ~/.local/pi-agent @earendil-works/pi-coding-agent
 opsaxiom            # 裸敲即自动进 pi 入口（首次先 /connect 接你的模型）
 ```
 
-三种模型接法，都在 `/connect` 里：**远程 API**（自己输 Key，最省心）/ **本机 Ollama** /
-**内置千问 0.5B**（`opsaxiom model pull` 下载后 `opsaxiom model serve` 起服务，离线备用）。
+`/connect` 支持**远程 API**（自己输 Key）/ **本机 Ollama** /
+**内置千问 0.5B**（`opsaxiom model pull` 下载，离线备用），预置 DeepSeek/Claude/OpenAI 等常用服务商。
 
 ## 开发者快速上手
 
