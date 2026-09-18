@@ -4,13 +4,11 @@
 > Skill 资产，让任何模型——包括跑在你内网的本地小模型——都能安全地使用它。
 
 > **社区已上线**：Skill 仓库 [opsaxiom-registry](https://github.com/hf4Academic/opsaxiom-registry) ·
-> 浏览网站 [hf4academic.github.io/opsaxiom-site](https://hf4academic.github.io/opsaxiom-site) ·
-> 接入：`opsaxiom hub init https://github.com/hf4Academic/opsaxiom-registry.git`
+> 浏览网站 [hf4academic.github.io/opsaxiom-site](https://hf4academic.github.io/opsaxiom-site)
 
 ## 一句话定位
 
-别人是"把大模型接到运维工具上"；我们是把专家经验做成经过仿真与实地双重验证的诊断流程，
-配上强制回滚、变更影响说明和社区认证体系。**可回滚是本项目的第一准则。**
+**像带着运维专家一起排查故障。**每一步操作都可回滚，每个 Skill 都经过社区验证——它给你方案，你来做决定。
 
 ## 开箱即用（实测流程）
 
