@@ -373,7 +373,7 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
   4. **降级链诚实性**：无模型时是否真的全功能（intake→bigram、叙事→原样、escalate→None/索引）。
   5. **排期**：原第九轮 Y（发布准备）现为第十一轮，是否按此推进。
 - **M 轮追加（发起人直接指示，2026-07-12）：模型后端扩展**
-  - **builtin 内置小模型**：千问 Qwen2.5-0.5B-Instruct GGUF（q4_k_m 469MB，ModelScope
+  - **builtin 本机小模型(Qwen2.5-0.5B)**：千问 Qwen2.5-0.5B-Instruct GGUF（q4_k_m 469MB，ModelScope
     直连），llama-cpp-python 本机推理——开箱即用的离线备用底座；intake few-shot 化。
   - **`opsaxiom model` CLI**：show/use/test/pull 四动作 + REPL 首启一次性向导；
     四后端 builtin/ollama/remote(openai-compatible)/pi 一键切换，健康探测诚实报缺口。
@@ -399,7 +399,7 @@ Fable 设计/评审 → 更新 TODO-opus.md → 【人切换到 Opus 4.8】
     本机取证有授权门（needs_grant→--grant），远端只出粘贴块计划不执行。pi 工具的后端。
   - **/connect 接模型**：TUI 内选服务商→输 Key→当场选模型，预置 DeepSeek/Claude/OpenAI/
     Gemini/OpenRouter/百炼/Kimi + 自定义(自填 URL/Key/Model)；连接 0600 落盘重启恢复。
-  - **model serve + llm_proxy**：内置千问起 OpenAI 兼容服务；垫片解 3 个真机实锤兼容问题
+  - **model serve + llm_proxy**：本机小模型(Qwen2.5-0.5B) 起 OpenAI 兼容服务；垫片解 3 个真机实锤兼容问题
     （content parts 数组→字符串、max_completion_tokens 字段名、HTTP/1.1 chunked SSE）。
   - **Docker**：多阶段 core/llm/full 三档；full 入口先起模型服务并等就绪（解 pi 连模型竞态）。
   - **两个真机实锤修复**：① registerProvider 部分覆盖抹掉内置 provider 的 baseUrl→

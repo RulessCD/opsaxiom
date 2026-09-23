@@ -73,7 +73,7 @@ class Repl:
         self.remote_target_os = None     # remote 模式下所选目标的 os 字段
         self.running = True
         try:
-            self.model_cfg = llm.load_config()   # None = 无模型，全走降级
+            self.model_cfg = llm.load_config_live()   # None = 无模型，全走降级
         except Exception:
             self.model_cfg = None
 
@@ -759,15 +759,68 @@ class Repl:
         print("  → 输入序号进入对应 Skill 逐步排查；回车则批量取证。")
 
     def _llm_prefill(self, symptom, params):
-        """有模型则从自然语言预填 params（显式 k=v 优先）；无模型原样返回。R11/T-3 由 llm 层保证。"""
+        """两段式之①（#33）：第一次调用只抽 entities 供候选重排，不抽参数——
+        参数等假说确定后按所选 skill 的清单定向抽（_llm_targeted_intake），
+        避免对 205 个 skill 的通用键盲目抽取。显式 k=v 仍然此处理入。
+        无模型/降级时静默，行为与旧版零依赖路径一致。"""
+        self.last_entities = []
         if self.model_cfg is None:
             return params
         r = llm.intake(symptom, config=self.model_cfg)
-        prefilled = {k: v for k, v in r.get("params", {}).items() if k not in params}
-        if prefilled:
-            shown = ", ".join(f"{k}={v}" for k, v in prefilled.items())
-            print(f"  （从你的描述预填：{shown}——回车确认，或输 k=v 覆盖）")
-        return {**prefilled, **params}
+        self.last_entities = [e for e in r.get("entities", []) if e]
+        return params
+
+    def _llm_targeted_intake(self, symptom, skills, params):
+        """两段式之②（#33）：假说确定后按 skill params 清单定向抽取。
+        批量模式取并集、同名只确认一次。抽到的逐项按 desc 人话确认（回车=认可，
+        直接说话/输 k=v 都可改）；没抽到的留给 _collect_params 按 desc 问询。
+        返回合并后的 params。R11/T-3/形状校验由 llm.targeted_intake 保证。"""
+        if self.model_cfg is None:
+            return params
+        wanted, seen = [], set()
+        for s in skills:                       # 并集 + 去重；只问模型能从原话抽的档
+            for prm in s.get("metadata", {}).get("params", []) or []:
+                name = prm.get("name")
+                if (name and name not in params
+                        and prm.get("source") in ("alert", "user")
+                        and name not in seen):
+                    seen.add(name)
+                    wanted.append({"name": name, "desc": prm.get("desc", "")})
+        if not wanted:
+            return params
+        r = llm.targeted_intake(symptom, wanted, config=self.model_cfg)
+        got = {k: v for k, v in r.get("params", {}).items() if k not in params}
+        if not got:
+            return params
+        # 逐项人话确认：desc 是 skill 自带的问询文案（不再是内部键名裸露）
+        desc_of = {w["name"]: (w.get("desc") or w["name"]).strip() for w in wanted}
+        print("  已从你的描述识别到以下信息（回车确认；不对就输正确的值）：")
+        for k, v in got.items():
+            try:
+                nv = input(f"  {desc_of.get(k, k)} [{v}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                nv = ""
+            if nv:
+                got[k] = nv.split("=", 1)[1] if nv.split("=", 1)[0] == k else nv
+        params.update(got)
+        return params
+
+    def _rerank_by_entities(self, hits, pool=10, keep=3):
+        """entities 辅助排序：先放宽到 pool（bigram 分数近的都进池），模型抽出的
+        实体在 skill 名/症状文案里命中的加分；分近的候选因此能被实体证据上提。
+        无模型/无实体时维持原序（截 keep），不改变零依赖行为。"""
+        ents = getattr(self, "last_entities", None) or []
+        if not ents or len(hits) <= 1:
+            return hits[:keep]
+        wide = hits[:pool]
+
+        def _boost(e):
+            blob = (e.get("name", "") + " " + e.get("symptom", "")).lower()
+            return sum(1.2 for ent in ents if ent.lower() in blob)   # 命中一个实体 +1.2
+
+        wide = [(sc + _boost(h), h) for sc, h in wide]
+        wide.sort(key=lambda x: (-x[0], x[1]["id"]))
+        return wide[:keep]
 
     def _intake(self, line):
         """陈述入口：建 incident、列假设。交互态自动接一键取证；非 TTY 只列假设（不阻塞）。"""
@@ -782,7 +835,9 @@ class Repl:
             self.remote_target_os = targets[tname].get("os") if tname in targets else None
         symptom, params = self._parse_symptom(line)
         params = self._llm_prefill(symptom, params)
-        self.last_hits = diagnose.match(symptom, idx=self.idx, top=3)
+        # 宽池 10 → entities 加分重排 → 取 3（无模型时 _rerank 原样截 3，与旧行为一致）
+        wide = diagnose.match(symptom, idx=self.idx, top=10)
+        self.last_hits = self._rerank_by_entities(wide, pool=10, keep=3)
         if not self.last_hits:
             self.last_unmatched = line
             self._show_hits(self.last_hits)
@@ -945,8 +1000,9 @@ class Repl:
             return
 
         # ===== 以下本机/手动模式：现有逻辑不动 =====
-        # 补参数：所有假设的必填参数（批量取证前问用户）
+        # 补参数：两段式之②（#33）定向抽取 → 不足部分 _collect_params 问询兜底
         skills = [h.skill for h in inc.hyps]
+        self._llm_targeted_intake(inc.symptom, skills, inc.params)
         params = self._collect_params(skills, inc.params)
         inc.params.update(params)
         for h in inc.hyps:
@@ -1028,9 +1084,32 @@ class Repl:
 
         # 6. 干跑 + 卷宗
         inc.dry_run()
-        print(inc.render_dossier())
+        dossier = inc.render_dossier()
+        print(dossier)
+        self._narrate_dossier(inc)
         self._offer_treatment(inc)
         self.last_incident_swept = True
+
+    def _narrate_dossier(self, inc):
+        """模型叙事（调用点2接入）：把卷宗结论讲成一句人话。纯展示层——
+        返回值只打印，绝不进判读/卷宗本体（R7/R10）；降级即整段不出。"""
+        if self.model_cfg is None:
+            return
+        d = inc.dossier()
+        rows = []
+        for bucket in ("confirmed", "refuted", "insufficient"):
+            for it in d.get(bucket, []):
+                ev = it["evidence"][0] if it["evidence"] else None
+                rows.append({"bucket": bucket, "name": it["name"],
+                             "conclusion": it["conclusion"] or "",
+                             "evidence": (f"{ev['field']}={ev['value']}" if ev else "")})
+        if not rows:
+            return
+        import json as _json
+        prompt = "症状：" + (inc.symptom or "") + "\n判读：" + _json.dumps(rows, ensure_ascii=False)
+        line = llm.narrate(prompt, config=self.model_cfg)
+        if line and line != prompt:                      # 降级=原样返回，不净增噪音
+            print(f"\n  💬 {line}")
 
     def _offer_treatment(self, inc):
         """回流点②（发起人口径 2026-09-09）：可处置假设全部列出让用户选——
@@ -1078,14 +1157,17 @@ class Repl:
         收尾语 y/n 都给。"""
         import ghutil
         try:
-            ans = input("\n  对这次诊断有帮助吗？ 👍y / 👎n\n  > ").strip()
+            ans = input("\n  对这次诊断有帮助吗？ 👍y / 👎n / 回车跳过\n  > ").strip()
         except (EOFError, KeyboardInterrupt):
             ans = ""
         done_hyps = [h for h in inc.hyps
                      if h.status == I.CONFIRMED
                      and (h.terminal or "").startswith("done:")]
+        if not ans:
+            print("  好。结论与证据都在上方卷宗，可随时 report 导出移交。")
+            return
         if ans.lower() not in ("y", "yes", "是"):
-            print("  已记录。结论与证据都在上方卷宗，可随时 report 导出移交。")
+            print("  已记录你的反馈。")
             return
         st, who, _ = ghutil.check_token()
         attestor = who if st == "valid" else "anonymous"
@@ -1216,8 +1298,9 @@ class Repl:
         3. 对 manual 桶里的探针逐条交互（保持与现有手动模式一致的体验）
         4. 干跑 + 卷宗
         """
-        # 补参数
+        # 补参数：两段式之②（#33）定向抽取 → 不足部分 _collect_params 问询兜底
         skills = [h.skill for h in inc.hyps]
+        self._llm_targeted_intake(inc.symptom, skills, inc.params)
         params = self._collect_params(skills, inc.params)
         inc.params.update(params)
         for h in inc.hyps:
@@ -1298,7 +1381,9 @@ class Repl:
 
         # 干跑 + 卷宗
         inc.dry_run()
-        print(inc.render_dossier())
+        dossier = inc.render_dossier()
+        print(dossier)
+        self._narrate_dossier(inc)
         self._offer_treatment(inc)
         self.last_incident_swept = True
 
@@ -1347,6 +1432,9 @@ class Repl:
             return
         parts = line.split()
         head = parts[0].lower()
+        if head == "opsaxiom" and len(parts) > 1:
+            # 提示语里给了全形命令（opsaxiom model pull …）时，REPL 里照敲也能走
+            parts, head = parts[1:], parts[1].lower()
         if head in ("quit", "exit", "q"):
             self.running = False
             return
@@ -1407,7 +1495,14 @@ class Repl:
             i = int(line)
             if 1 <= i <= len(self.last_hits):
                 self.last_incident_swept = True   # 用户选 v1，标记已处理，避免回车误触发批量
-                self._run(self.last_hits[i - 1][1]["id"])
+                sid = self.last_hits[i - 1][1]["id"]
+                # 两段式之②：假说已确定 → 按该 skill 的参数清单定向抽参（#33）
+                _, sk = _find_skill(sid)
+                if sk:
+                    symptom = getattr(self.last_incident, "symptom", "") if self.last_incident else ""
+                    self._llm_targeted_intake(symptom, [sk], self.last_incident.params if self.last_incident else {})
+                self._run(self.last_hits[i - 1][1]["id"],
+                          params=self.last_incident.params if self.last_incident else None)
             else:
                 print("  没有这个序号。先描述问题看到候选，再输序号。")
             return
@@ -1446,6 +1541,10 @@ class Repl:
             try:
                 line = input("axiom> ")
                 idle_interrupt = False
+                try:                                # 每轮刷新模型配置（外部改动自动生效）
+                    self.model_cfg = llm.load_config_live()
+                except Exception:
+                    self.model_cfg = None
                 self._handle(line)
             except KeyboardInterrupt:
                 if idle_interrupt:

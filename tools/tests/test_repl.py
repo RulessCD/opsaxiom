@@ -55,7 +55,7 @@ def test_numeric_selection_runs_that_skill(monkeypatch):
     r = repl.Repl()
     r._handle("kafka 积压")
     picked = {}
-    monkeypatch.setattr(r, "_run", lambda sid, resume=False: picked.setdefault("id", sid))
+    monkeypatch.setattr(r, "_run", lambda sid, resume=False, **kw: picked.setdefault("id", sid))
     r._handle("1")
     assert picked["id"] == r.last_hits[0][1]["id"]
 

@@ -394,7 +394,7 @@ class Session:
         self.io._p(self.r(n.get("summary", "")))
         self.outcome = kind
         # 统一反馈：done/escalate 都问"有帮助吗"
-        self.io._p("\n对这次诊断有帮助吗？ 👍y / 👎n")
+        self.io._p("\n对这次诊断有帮助吗？ 👍y / 👎n / 回车跳过")
         ans = ""
         if self.io.answers is not None:
             ans = self.io.paste(n["id"] + ":fb", "").strip()
@@ -404,11 +404,15 @@ class Session:
             except (EOFError, KeyboardInterrupt):
                 ans = ""
         self._log(n["id"], "feedback", answer=ans)
-        # y → 静默签名；n → 统一上报社区（done/escalate 一致）
+        # 三态：y → 静默签名；n → 上报社区（发起人 2026-09-15 裁定，行为不变
+        # 只是收尾不再念导出话术）；回车空 → 中性跳过（不发任何东西）
         if ans.lower() in ("y", "yes", "是"):
             self._offer_attest_silent(n)
-        else:
+        elif ans.lower() in ("n", "no", "否"):
             self._report_issue(n)
+        else:
+            # 回车跳过 → 最可能要交棒他人：提示卷宗可导出（不发出任何东西）
+            self.io._p("好。结论与证据都在上方卷宗，可随时 report 导出移交。")
 
     def _has_gh_token(self):
         """薄壳：文件里有 token 即 True（不发请求）。细粒度状态走 ghutil.check_token。"""

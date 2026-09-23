@@ -32,8 +32,24 @@ def config_path():
     return base / "model.yaml"
 
 
+def _flatten_profile(doc):
+    """model.yaml v2（profiles+active）→ 单份 cfg；v1（旧单段）原样返回。"""
+    if not isinstance(doc, dict):
+        return doc
+    if "profiles" not in doc:
+        return doc                                   # v1 旧格式：单段 enabled/backend/...
+    profiles = doc.get("profiles") or {}
+    act = doc.get("active")
+    if not act or act not in profiles:
+        return {"enabled": False}                    # active 无效 = 未接
+    flat = dict(profiles[act])
+    flat["enabled"] = True
+    flat["_profile"] = act                           # 展示用：当前 profile 名
+    return flat
+
+
 def load_config(path=None):
-    """读 model.yaml；缺文件/未启用/解析失败 → None（= 无模型，全走降级）。"""
+    """读 model.yaml（v1 单段 / v2 profiles 均可）；缺文件/未启用/解析失败 → None。"""
     import yaml
     p = pathlib.Path(path) if path else config_path()
     if not p.exists():
@@ -42,7 +58,28 @@ def load_config(path=None):
         cfg = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     except Exception:
         return None
+    cfg = _flatten_profile(cfg)
     return cfg if cfg.get("enabled") else None
+
+
+_mtime_cache = {"t": None, "cfg": None}
+
+
+def load_config_live(path=None):
+    """带 mtime 缓存的 load_config：文件没变就返回上次结果（纳秒级 stat）。
+
+    供运行时（REPL）每次用模型前调用——外部终端改了 model.yaml，下一句
+    自动静默生效；文件未变时零额外开销。
+    """
+    p = pathlib.Path(path) if path else config_path()
+    try:
+        t = p.stat().st_mtime_ns
+    except OSError:
+        t = None
+    if _mtime_cache["t"] != t or _mtime_cache["cfg"] is None:
+        _mtime_cache["t"] = t
+        _mtime_cache["cfg"] = load_config(path)
+    return _mtime_cache["cfg"]
 
 
 # ---------- builtin：内置本地小模型（M-1，开箱即用的 floor）----------
@@ -130,19 +167,57 @@ def _pi_call(cfg, prompt, system, timeout=60):
 
 
 # ---------- 后端调用（stdlib urllib）----------
+def _ssl_context():
+    """HTTPS 信任库兜底：python.org 发行版 macOS 常不带默认 CA 包
+    （CERTIFICATE_VERIFY_FAILED——合法站点也报）。certifi 在就用它的
+    信任库（不跳过验证，R10 同款宁缺勿滥：curl 过、Python 不过的根因）。
+    无 certifi 时返回 None = urlopen 默认行为。"""
+    try:
+        import certifi
+        import ssl
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
+
+
 def _http_json(url, payload, timeout=20):
     import urllib.request
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    ctx = _ssl_context()
+    with urllib.request.urlopen(req, timeout=timeout, **({"context": ctx} if ctx else {})) as r:  # noqa: E501
         return json.loads(r.read().decode("utf-8"))
 
 
+def _err_head(e):
+    """异常 → 一行人话主干，带得上就带码：401 Unauthorized / 连接被拒…"""
+    if isinstance(e, ImportError) or not isinstance(e, Exception):
+        return str(e)
+    # urlopen 把 HTTPError 包成 URLError("<...>")——拆包拿内层
+    inner = getattr(e, "reason", None)
+    code = getattr(inner, "code", None)
+    if code:
+        return f"{code} {inner}"
+    return (str(e) or type(e).__name__).split("\n")[0].strip()
+
+
+_last_error = ""
+
+
+def last_error():
+    """最近一次 backend_call 失败原因（人话串）。降级文案配套，纯诊断展示。"""
+    return _last_error
+
+
 def backend_call(cfg, prompt, system):
-    """按 cfg.backend 调后端，返回文本；任何异常/超时 → None（触发降级）。"""
+    """按 cfg.backend 调后端，返回文本；任何异常/超时 → None（触发降级）。
+    失败原因留在模块级 last_error()，供 model test 探针讲人话。"""
+    global _last_error
+    _last_error = ""
     try:
-        backend = cfg.get("backend")
+        # backend 缺失时按 kind 回退（手改 yaml 少写 backend 不至于静默失联）
+        backend = cfg.get("backend") or cfg.get("kind")
         model = cfg.get("model", "")
         if backend == "builtin":
             return _builtin_call(cfg, prompt, system)
@@ -166,10 +241,13 @@ def backend_call(cfg, prompt, system):
                 url, data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json",
                          **({"Authorization": f"Bearer {headers_key}"} if headers_key else {})})
-            with urllib.request.urlopen(req, timeout=20) as r:
+            ctx = _ssl_context()
+            with urllib.request.urlopen(req, timeout=20,
+                                        **({"context": ctx} if ctx else {})) as r:
                 data = json.loads(r.read().decode("utf-8"))
             return data["choices"][0]["message"]["content"]
-    except Exception:
+    except Exception as e:
+        _last_error = _err_head(e)                    # 供 cmd_test 探针讲人话
         return None
     return None
 
@@ -261,6 +339,35 @@ def intake(symptom, config=None, caller=None):
 
 
 # ---------- 调用点 2：叙事 ----------
+def targeted_intake(symptom, wanted, config=None, caller=None):
+    """调用点 1b（#33 两段式）：假说确定后，按 skill 的 params 清单定向抽取。
+    wanted: [{"name": ..., "desc": ...}]（skill metadata.params 的 alert/user 档）。
+    返回 {"params": {...}}——仅含 wanted 里的键；两道确定性校验与 intake 全同
+    （T-3 shell 安全 + _PARAM_SHAPE 形状），模型输出永远不裸信。
+    降级（无模型/超时/不合法）→ {"params": {}}，调用方对缺失项照常走问询。"""
+    fallback = {"params": {}}
+    call = _caller(config, caller)
+    if call is None or not wanted:
+        return fallback
+    lines = "\n".join(f"- {w['name']}: {w.get('desc') or w['name']}" for w in wanted)
+    sys_prompt = (
+        "你是运维分诊助手。从用户陈述里抽取下面这些参数的值；"
+        "陈述里没有提到的键就省略，不要编造。只输出 JSON：{\"参数名\":\"值\"}。\n"
+        "需要的参数：\n" + lines + "\n只输出 JSON，不要解释。")
+    raw = call(redact(symptom), sys_prompt)       # R11：送模型前脱敏
+    obj = _extract_json(raw)
+    if not isinstance(obj, dict):
+        return fallback
+    params = {}
+    allow = {w["name"] for w in wanted}           # 只收清单内的键（定向）
+    for k, v in obj.items():
+        if k in allow and isinstance(k, str) and k.isidentifier():
+            v = str(v)
+            if is_shell_safe(v) and _shape_ok(k, v):
+                params[k] = v
+    return {"params": params}
+
+
 _NARRATE_SYS = (
     "你是运维助手。把给定的结构化判读用一句中文人话讲清楚，"
     "只解释、不建议命令、不超过 40 字。只输出这句话。")

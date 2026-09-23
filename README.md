@@ -35,7 +35,7 @@ tar xzf opsaxiom-offline-v*.tar.gz && cd opsaxiom-offline-*
 ./install.sh --offline
 ```
 
-离线包内包含：全部 Skill 库、工具链依赖 wheel、内置小模型，解压即装，无需外网。
+离线包内包含：全部 Skill 库、工具链依赖 wheel、本机小模型(Qwen2.5-0.5B)，解压即装，无需外网。
 
 **2) 用：敲一个词，然后说人话**
 
@@ -116,7 +116,7 @@ echo '{"alerts":[{"labels":{"alertname":"GPU 掉卡 XID 79"}}]}' | opsaxiom-webh
 - **本地化 Skill**（docs/13）：linkbook 个人网页台账、overlay 叠加层（填 placeholder/贴注记，
   不碰通用树）、fork 派生——**个人层结构性不出门**（打包/CI 拒收，`report --share` 自动剥离 📌 与内网地址）。
 - **可选接模型**（只做理解/叙事/建议，永不出命令、不判分支）：
-  内置千问 0.5B（`opsaxiom model pull` 本机离线跑，开箱备用）/ Ollama / OpenAI 兼容
+  本机小模型(Qwen2.5-0.5B)（`opsaxiom model pull` 本机离线跑，开箱备用）/ Ollama / OpenAI 兼容
   远程 API / **Pi Agent Harness 多 provider 网关**，`opsaxiom model` 一条命令切换，
   首启有向导；任一后端不可用自动降级为关键词匹配模式，绝不阻塞诊断。
 - 一键部署（`install.sh`/docker/离线包）+ `doctor` 自检；经验捕获三通道
@@ -154,7 +154,7 @@ opsaxiom            # 裸敲即自动进 pi 入口（首次先 /connect 接你�
 ```
 
 `/connect` 支持**远程 API**（自己输 Key）/ **本机 Ollama** /
-**内置千问 0.5B**（`opsaxiom model pull` 下载，离线备用），预置 DeepSeek/Claude/OpenAI 等常用服务商。
+**本机小模型(Qwen2.5-0.5B)**（`opsaxiom model pull` 下载，离线备用），预置 DeepSeek/Claude/OpenAI 等常用服务商。
 
 ## 开发者快速上手
 

@@ -107,21 +107,52 @@ def test_make_config_variants():
 
 def test_use_writes_and_load_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
-    model_cli._write_cfg(model_cli.make_config("ollama", model="qwen2.5:3b"))
+    model_cli._set_active("ollama")
+    # builtin/ollama 需要单段字段（llm._builtin_call 读 model_path 等），use 会补写
+    doc, p = model_cli._load_doc()
+    doc["profiles"]["ollama"] = {"backend": "ollama", "endpoint": "http://x",
+                                 "model": "qwen2.5:3b"}
+    model_cli._save_doc(doc, p)
     cfg = llm.load_config()
     assert cfg and cfg["backend"] == "ollama" and cfg["model"] == "qwen2.5:3b"
     # off → load_config 返回 None（= 未接模型，全走降级）
-    model_cli._write_cfg(model_cli.make_config("off"))
+    model_cli._set_active(None)
     assert llm.load_config() is None
 
 
 def test_off_config_means_wizard_wont_reask(monkeypatch, tmp_path):
     """向导任何选择都落盘：off 也写文件 → 文件存在 → REPL 不再问。"""
     monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
-    model_cli._write_cfg(model_cli.make_config("off"))
+    model_cli._set_active(None)
     assert llm.config_path().exists()
     d = yaml.safe_load(llm.config_path().read_text())
-    assert d == {"enabled": False}
+    assert d.get("active", "x") is None or d.get("enabled") is False
+
+
+def test_profile_upsert_switch_remove(monkeypatch, tmp_path):
+    """多配置管理：upsert 两份 remote → switch → remove 活跃份回未接。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    model_cli._upsert_profile("corp", {"kind": "openai-compatible",
+                                       "endpoint": "http://c", "api_key": "k1"})
+    model_cli._upsert_profile("ds", {"kind": "openai-compatible",
+                                     "endpoint": "http://d", "api_key": "k2"})
+    assert llm.load_config()["_profile"] == "ds"
+    model_cli._set_active("corp")
+    assert llm.load_config()["_profile"] == "corp"
+    model_cli._set_active("ds")
+    assert model_cli._remove_profile("ds")
+    assert llm.load_config() is None            # 活跃份被删 → 未接
+    assert model_cli._remove_profile("nope") is False
+
+
+def test_v1_config_autoflattens(monkeypatch, tmp_path):
+    """v1 旧单段格式无需迁移即可读；load_config 形状不变。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    llm.config_path().write_text(
+        yaml.safe_dump({"enabled": True, "backend": "ollama",
+                        "endpoint": "http://x", "model": "q"}))
+    cfg = llm.load_config()
+    assert cfg["backend"] == "ollama" and cfg["model"] == "q"
 
 
 # ---------- install-local 体检（发起人需求：装前查依赖与空间） ----------
