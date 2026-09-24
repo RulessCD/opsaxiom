@@ -120,20 +120,23 @@ class Incident:
         return evidence.build_plan([(h.skill, h.params) for h in self.hyps],
                                    target=self.target)
 
-    def auto_sweep(self, runner=None, now=None):
-        """本机协驾：自动执行 auto 探针入事实库（需 target=local 且已授权，调用方把关）。"""
+    def auto_sweep(self, runner=None, now=None, on_result=None):
+        """本机协驾：自动执行 auto 探针入事实库（需 target=local 且已授权，调用方把关）。
+        on_result：可选逐条回调（#36 本机流式对齐），透传 execute_auto。"""
         rep = sweep.execute_auto(self.plan(), self.params, self.store,
-                                 now=now, runner=runner)
+                                 now=now, runner=runner, on_result=on_result)
         self._t("auto_sweep", executed=sum(1 for r in rep if r["status"] == "executed"))
         return rep
 
-    def mixed_sweep(self, now=None, remote_runner=None, authorized=None):
+    def mixed_sweep(self, now=None, remote_runner=None, authorized=None, on_result=None):
         """混合取证（I-7）：本机 + 已授权远程目标自动执行；未授权/不可达目标留作粘贴。
-        返回 sweep.execute_mixed 的 {executed, manual}。"""
+        返回 sweep.execute_mixed 的 {executed, manual}。
+        on_result：逐条回调（流式展示），透传 execute_mixed，本方法不自用。"""
         plan = evidence.build_plan([(h.skill, h.params) for h in self.hyps],
                                    target=self.target)
         res = sweep.execute_mixed(plan, self.params, self.store, now=now,
-                                  remote_runner=remote_runner, authorized=authorized)
+                                  remote_runner=remote_runner, authorized=authorized,
+                                  on_result=on_result)
         n = sum(1 for r in res["executed"] if r["status"] == "executed")
         self._t("mixed_sweep", executed=n, manual_targets=sorted(res["manual"]))
         return res
@@ -268,12 +271,15 @@ class Incident:
 
         def _ev(items):
             for it in items:
-                line = f"  {mark} {label}  {it['name']} [{it['badge']}]"
-                out.append(line)
+                # 发起人 2026-09-23 裁定：✔ 后不带 skill badge（方法学可信度
+                # 与本轮判读无关，候选列表里再看）；结论/证据分组各领一句前缀。
+                out.append(f"  {mark} {label}  {it['name']}")
                 if it["conclusion"]:
-                    out.append(f"       {it['conclusion']}")
-                for e in it["evidence"][:4]:
-                    out.append(f"       证据: {e['source_cmd']} → {e['field']} = {e['value']}")
+                    out.append(f"       结果：{it['conclusion']}")
+                if it["evidence"]:
+                    out.append("       证据：")
+                    for e in it["evidence"][:4]:
+                        out.append(f"         · {e['source_cmd']} → {e['field']} = {e['value']}")
                 if it.get("pending"):
                     out.append(f"       → 待处置: {it['pending']['prompt']}")
                 if it["missing"]:
@@ -281,7 +287,7 @@ class Incident:
                 if it.get("overlay_note"):
                     for ln in it["overlay_note"].splitlines():
                         out.append(f"       {ln}")
-        mark, label = "✔", "已证实"
+        mark, label = "✔", "已排查"                    # CONFIRMED：查过有结论（可正可反）
         _ev(d[CONFIRMED])
         mark, label = "✘", "已排除"
         _ev(d[REFUTED])
@@ -323,9 +329,10 @@ class Incident:
         lines = [f"# 故障报告：{self.symptom}", "",
                  f"- 目标：{self.target}", ""]
         if d[CONFIRMED]:
-            lines.append("## 结论（已证实）")
+            # 与 render_dossier 同口径（发起人 2026-09-23）：已排查、不带 badge
+            lines.append("## 结论（已排查）")
             for it in d[CONFIRMED]:
-                lines.append(f"- **{it['name']}** [{it['badge']}]：{it['conclusion']}")
+                lines.append(f"- **{it['name']}**：{it['conclusion']}")
                 for e in it["evidence"][:6]:
                     lines.append(f"  - 证据：`{e['source_cmd']}` → {e['field']} = {e['value']}")
             lines.append("")

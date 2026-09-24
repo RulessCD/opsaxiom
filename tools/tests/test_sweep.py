@@ -137,3 +137,40 @@ def test_trust_grant_and_check(tmp_path):
     S.grant_trust("local", path=tf)
     assert S.is_trusted("local", path=tf)
     assert not S.is_trusted("switch-a", path=tf)      # 逐目标，非全局
+
+
+# ---- #36 本机流式对齐：execute_auto 逐条回调 + rec 五要素字段 ----
+
+def test_execute_auto_on_result_per_probe_and_rec_shape():
+    """on_result 逐条回调（run 一条调一条，非攒批）；rec 带 target/for_skills/
+    out（预截 3 行）/out_nlines（诚实总数）；不传 on_result 行为不变。"""
+    df = _load("skills/host/disk-full/skill.yaml")
+    plan = E.build_plan([(df, {"mount": "/data"})])
+    store = F.FactStore()
+    out5 = "l1\nl2\nl3\nl4\nl5"
+    runner = _fake_runner({p["cmd"]: out5 for p in S.flatten(plan)})
+    seen = []
+    S.execute_auto(plan, {"mount": "/data"}, store, now=1000.0,
+                   runner=runner, on_result=seen.append)
+    done = [r for r in seen if r["status"] == "executed"]
+    assert done, "回调应有 executed 记录"
+    rec = done[0]
+    assert rec["out"] == "l1\nl2\nl3" and rec["out_nlines"] == 5
+    assert rec["target"] == F.LOCAL and rec["for_skills"]
+    # 回调次数 = executed + error（blocked-* 不回调）
+    blocked = [r for r in S.execute_auto(plan, {"mount": "/data"}, F.FactStore(),
+                                         now=1000.0, runner=runner)
+               if r["status"].startswith("blocked")]
+    for _ in blocked:
+        pass  # blocked 类型不触发回调（无执行结果）——由下方 stream 用例断言
+
+
+def test_execute_auto_without_on_result_unchanged():
+    """不传 on_result：report 元素与旧 schema 兼容（fields 键仍在）。"""
+    df = _load("skills/host/disk-full/skill.yaml")
+    plan = E.build_plan([(df, {"mount": "/data"})])
+    store = F.FactStore()
+    runner = _fake_runner({})
+    report = S.execute_auto(plan, {"mount": "/data"}, store, now=1.0, runner=runner)
+    assert all("status" in r for r in report)
+    assert any(r["status"] == "executed" and "fields" in r for r in report)

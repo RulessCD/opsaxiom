@@ -86,15 +86,28 @@ def _default_runner(cmd, timeout=15):
     return r.stdout
 
 
-def execute_auto(plan, params, store, now=None, runner=None):
+def execute_auto(plan, params, store, now=None, runner=None, on_result=None):
     """自动执行 auto 探针（本机只读），解析入库。返回执行报告列表。
 
     每条报告：{node, cmd, status, fields?}。status ∈
       executed / blocked-injection / blocked-not-readonly / not-auto / error。
     runner 可注入（测试用），默认真实 bash -c。
+    on_result：可选逐条回调（#36 本机流式对齐），每条报告出结果即调
+    on_result(r)（r 与返回的 report 元素同形）；blocked-* 不回调（无执行结果）。
     """
     runner = runner or _default_runner
     bad = unsafe_values(params)
+    if on_result is not None:
+        # 展示层回调绝不打断取证：异常吞掉（与 execute_mixed 同款双保险）
+        on_result_raw = on_result
+
+        def on_result(r, _raw=on_result_raw):
+            try:
+                _raw(r)
+            except Exception:                            # noqa: BLE001
+                pass
+    else:
+        on_result = None
     report = []
     for p in flatten(plan):
         if not p["auto"]:
@@ -113,12 +126,22 @@ def execute_auto(plan, params, store, now=None, runner=None):
         try:
             stdout = runner(p["cmd"])
         except Exception as e:                       # noqa: BLE001
-            report.append({"node": p["node"], "cmd": p["cmd"],
-                           "status": "error", "err": str(e)})
+            from gate import err_kind
+            rec = {"node": p["node"], "cmd": p["cmd"],
+                   "status": "error", "err": str(e), "err_kind": err_kind(e)}
+            report.append(rec)
+            if on_result:
+                on_result(rec)
             continue
         parsed = _store_result(store, p, stdout, now)
-        report.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",
-                       "fields": [k for k in parsed if k not in ("rows", "lines")]})
+        out_head, out_nlines = _out_head(stdout)
+        rec = {"node": p["node"], "cmd": p["cmd"], "status": "executed",
+               "target": p.get("target", LOCAL), "for_skills": p.get("for_skills", []),
+               "out": out_head, "out_nlines": out_nlines,
+               "fields": [k for k in parsed if k not in ("rows", "lines")]}
+        report.append(rec)
+        if on_result:
+            on_result(rec)
     return report
 
 
@@ -138,9 +161,19 @@ def classify_target(name, targets=None, authorized=None, reachable=None):
     return "auto", "远程已授权"
 
 
+# ---------- 执行报告：输出预截（#35/#36 五要素的结果预览共用）----------
+def _out_head(out, max_lines=3, max_chars=120):
+    """多行输出预截（截好再存，rec 不持全文引用）：前 3 行 × 120 字符。
+    单标量输出（一两行）原样；调用方拿 (摘要文本, 总行数) 自行组行。"""
+    lines = out.splitlines() if out else []
+    head = lines[:max_lines]
+    head = [ln[:max_chars] for ln in head]
+    return "\n".join(head), len(lines)
+
+
 def execute_mixed(plan, params, store, *, targets=None, now=None,
                   local_runner=None, remote_runner=None, authorized=None,
-                  sudo_routed=None):
+                  sudo_routed=None, on_result=None):
     """混合取证：本机探针走 bash，远程已授权目标走 gate，未授权/不可达目标跳过
     （由调用方渲染成粘贴块）。返回 {executed:[...], manual:{target:[probe,...]}}。
 
@@ -149,6 +182,8 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
     sudo_routed: (target_name, cmd) -> bool——白名单档分流（B 轮 v2）：仅对
                   【未授权】的 sudo_whitelist ssh 目标有意义（root 档直登不路由）；
                   返回 False = 名单外 → 降级贴回（人工举证）。None = 接 gate 同源谓词。
+    on_result: 可选逐条回调（C，流式展示）：每条探针出结果即调
+               on_result(r)（r 与 executed 中的 dict 同形），不等整轮攒批。
     """
     import gate
     authorized = authorized or gate.is_authorized
@@ -158,6 +193,17 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
         lambda tn, cmd, pr: gate.run_remote(tn, cmd, params=pr, now=now))
     local_runner = local_runner or _default_runner
     bad = unsafe_values(params)
+    if on_result is not None:
+        # 展示层回调绝不打断取证：异常吞掉（repl 侧同款兜底，双保险）
+        on_result_raw = on_result
+
+        def on_result(r, _raw=on_result_raw):
+            try:
+                _raw(r)
+            except Exception:                            # noqa: BLE001
+                pass
+    else:
+        on_result = None
     executed, manual = [], {}
     for p in flatten(plan):
         tname = p["target"]
@@ -170,13 +216,21 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
             except Exception as e:                       # noqa: BLE001
                 from gate import err_kind
                 msg = str(e).strip() or type(e).__name__   # 空 str 异常兜底（真机教训）
-                executed.append({"node": p["node"], "cmd": p["cmd"],
-                                 "status": "error", "err": msg, "err_kind": err_kind(e)})
+                rec = {"node": p["node"], "cmd": p["cmd"], "for_skills": p.get("for_skills", []),
+                       "status": "error", "err": msg, "err_kind": err_kind(e)}
+                executed.append(rec)
+                if on_result:
+                    on_result(rec)
                 continue
             parsed = _store_result(store, p, out, now)
-            executed.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",
-                             "target": tname,
-                             "fields": [k for k in parsed if k not in ("rows", "lines")]})
+            out_head, out_nlines = _out_head(out)
+            rec = {"node": p["node"], "cmd": p["cmd"], "for_skills": p.get("for_skills", []),
+                   "status": "executed", "target": tname, "out": out_head,
+                   "out_nlines": out_nlines,
+                   "fields": [k for k in parsed if k not in ("rows", "lines")]}
+            executed.append(rec)
+            if on_result:
+                on_result(rec)
             continue
         # 远程目标分流（B 轮 v2 档位，docs/12 §5.6）：
         # 白名单目标（ssh + sudo_whitelist）分两档——
@@ -212,13 +266,22 @@ def execute_mixed(plan, params, store, *, targets=None, now=None,
             # err_kind 结构化类别供 repl fail-fast 判定（弃错误文本匹配，裁定 3）
             from gate import err_kind
             msg = str(e).strip() or type(e).__name__
-            executed.append({"node": p["node"], "cmd": p["cmd"], "status": "error",
-                             "target": tname, "err": msg, "err_kind": err_kind(e)})
+            rec = {"node": p["node"], "cmd": p["cmd"], "for_skills": p.get("for_skills", []),
+                   "status": "error", "target": tname, "err": msg,
+                   "err_kind": err_kind(e)}
+            executed.append(rec)
+            if on_result:
+                on_result(rec)
             continue
         parsed = _store_result(store, p, out, now)
-        executed.append({"node": p["node"], "cmd": p["cmd"], "status": "executed",
-                         "target": tname,
-                         "fields": [k for k in parsed if k not in ("rows", "lines")]})
+        out_head, out_nlines = _out_head(out)
+        rec = {"node": p["node"], "cmd": p["cmd"], "for_skills": p.get("for_skills", []),
+               "status": "executed", "target": tname, "out": out_head,
+               "out_nlines": out_nlines,
+               "fields": [k for k in parsed if k not in ("rows", "lines")]}
+        executed.append(rec)
+        if on_result:
+            on_result(rec)
     return {"executed": executed, "manual": manual}
 
 

@@ -297,3 +297,146 @@ def test_treatment_session_carries_facts(monkeypatch, capsys, tmp_path):
         r._run_treatment(h, inc)
     assert captured["facts"] is inc.store
     assert captured["target"] == inc.target
+
+
+# ---------- #35 执行行五要素：排查列/目标列动态去重 + 结果预览 ----------
+
+def _feed(inc, executed):
+    """_sweep_remote 的 mixed_sweep 假桩：直接回喂 executed/manual。"""
+    import incident as I
+    return {"executed": executed, "manual": {}}
+
+
+def test_probe_label_ctx_single_skill_no_rank_column(monkeypatch):
+    """单假说：排查列永不展示（show_rank=False）。"""
+    import incident as I
+    skill = {"metadata": {"id": "t.a", "name": "甲", "taxonomy": "host/x"},
+             "tree": {"entry": "c", "nodes": []}}
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    inc = I.Incident("卡")
+    inc.add_hypotheses([skill])
+    r = repl.Repl()
+    cfg = r._probe_label_ctx(inc)
+    assert cfg["show_rank"] is False
+    assert cfg["show_target"] is False              # 单目标不展示目标列
+
+
+def test_probe_label_ctx_multi_skill_uniform_for_skills_no_rank(monkeypatch):
+    """多假说但所有指令归属同一集合（全 1+2）→ 列无信息量，不打。"""
+    import incident as I
+    a = {"metadata": {"id": "t.a", "name": "甲", "taxonomy": "host/x"},
+         "tree": {"entry": "c", "nodes": []}}
+    b = {"metadata": {"id": "t.b", "name": "乙", "taxonomy": "host/x"},
+         "tree": {"entry": "c", "nodes": []}}
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    inc = I.Incident("卡")
+    inc.add_hypotheses([a, b])
+    monkeypatch.setattr(I.Incident, "plan", lambda self: {"waves": [{"probes": [
+        {"node": "c", "cmd": "df", "auto": False, "index": 0,
+         "for_skills": ["t.a", "t.b"]},
+        {"node": "d", "cmd": "free", "auto": False, "index": 1,
+         "for_skills": ["t.b", "t.a"]},
+    ]}]})
+    r = repl.Repl()
+    cfg = r._probe_label_ctx(inc)
+    assert cfg["show_rank"] is False                # 集合相同（顺序无关）→ 不打
+
+
+def test_probe_label_ctx_multi_skill_mixed_for_skills_shows_rank(monkeypatch):
+    """多假说且归属有差异（有独占也有共用）→ 整轮打排查标签；id→序号映射
+    与候选菜单序号一致（顺序沿 hits→hyps 传递不洗牌）。"""
+    import incident as I
+    a = {"metadata": {"id": "t.a", "name": "甲", "taxonomy": "host/x"},
+         "tree": {"entry": "c", "nodes": []}}
+    b = {"metadata": {"id": "t.b", "name": "乙", "taxonomy": "host/x"},
+         "tree": {"entry": "c", "nodes": []}}
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    inc = I.Incident("卡")
+    inc.add_hypotheses([a, b])
+    monkeypatch.setattr(I.Incident, "plan", lambda self: {"waves": [{"probes": [
+        {"node": "c", "cmd": "df", "auto": False, "index": 0,
+         "for_skills": ["t.a"]},
+        {"node": "d", "cmd": "free", "auto": False, "index": 1,
+         "for_skills": ["t.b", "t.a"]},
+    ]}]})
+    r = repl.Repl()
+    cfg = r._probe_label_ctx(inc)
+    assert cfg["show_rank"] is True and cfg["id2n"] == {"t.a": 1, "t.b": 2}
+    # for_skills 序与菜单序一致：t.a=排查1、t.b=排查2
+    assert r._probe_tag({"for_skills": ["t.a", "t.b"]}, cfg["id2n"], True) == "排查1+排查2"
+    assert r._probe_tag({"for_skills": ["t.b"]}, cfg["id2n"], True) == "排查2"
+
+
+def test_probe_row_scalar_value_and_rank_tag(capsys):
+    """✅ 行五要素：状态+指令+标量值预览+排查标签；单目标无目标列。"""
+    r = repl.Repl()
+    r._probe_cfg = {"id2n": {"t.a": 1, "t.b": 2}, "show_target": False,
+                    "show_rank": True}
+    r._show_probe_result({"node": "c", "cmd": "df -i -P /var",
+                          "status": "executed",
+                          "for_skills": ["t.a", "t.b"],
+                          "target": "web-01", "out": "25", "out_nlines": 1,
+                          "fields": ["output"]})
+    out = capsys.readouterr().out
+    assert "✅" in out and "df -i -P /var" in out
+    assert "25" in out                              # 标量值直接可见
+    assert "排查1+排查2" in out
+    assert "web-01" not in out                      # 单目标不打目标列
+
+
+def test_probe_row_multiline_output_truncated(capsys):
+    """多行输出：引导词独占一行（保 df 自带列对齐），明细真换行逐行 7 格
+    缩进，超 3 行给 …（共 N 行）。"""
+    r = repl.Repl()
+    r._probe_cfg = {"id2n": {}, "show_target": False, "show_rank": False}
+    r._show_probe_result({"node": "n", "cmd": "du", "status": "executed",
+                          "target": "t", "for_skills": [],
+                          "out": "l1\nl2\nl3", "out_nlines": 20})
+    out = capsys.readouterr().out
+    assert "       返回结果：\n" in out              # 引导词独占一行（保表格对齐）
+    assert "\n       l1\n" in out and "\n       l2\n" in out and "\n       l3\n" in out
+    assert "共 20 行" in out
+
+
+def test_probe_row_scalar_two_line_layout_and_brackets(capsys):
+    """二版结构：第一行 = ✅ 指令 ⟦排查N⟧（⟦⟧ 包裹元信息），第二行 =
+    "返回结果：值"；箭头衔接退役（不含卷宗行）。"""
+    r = repl.Repl()
+    r._probe_cfg = {"id2n": {"t.a": 1}, "show_target": False, "show_rank": True}
+    r._show_probe_result({"node": "c", "cmd": "df", "status": "executed",
+                          "for_skills": ["t.a"], "target": "t",
+                          "out": "25", "out_nlines": 1})
+    out = capsys.readouterr().out
+    assert "⟦排查1⟧" in out                        # 括号符包裹
+    assert "返回结果：25" in out
+    lines = out.rstrip("\n").splitlines()
+    assert len(lines) == 2 and lines[1].lstrip().startswith("返回结果：")
+    assert " → " not in out                         # 箭头退役
+
+
+def test_probe_row_empty_output_prints_null(capsys):
+    """空输出：打"返回结果：空"（不打空洞行）。"""
+    r = repl.Repl()
+    r._probe_cfg = {"id2n": {}, "show_target": False, "show_rank": False}
+    r._show_probe_result({"node": "c", "cmd": "cmd", "status": "executed",
+                          "target": "t", "for_skills": [],
+                          "out": "", "out_nlines": 0})
+    out = capsys.readouterr().out
+    assert "返回结果：空" in out
+
+
+def test_probe_row_error_keeps_reason_and_tag(capsys):
+    """❌ 行：指令+原因（即其结果）+排查标签；样例纠正——门拒绝的指令是 ❌ 非 ✅。"""
+    r = repl.Repl()
+    r._probe_cfg = {"id2n": {"t.a": 1}, "show_target": False, "show_rank": True}
+    r._show_probe_result({"node": "n", "cmd": "smartctl --scan",
+                          "status": "error", "for_skills": ["t.a"],
+                          "target": "t", "err": "写/非只读命令被执行门拒绝"})
+    out = capsys.readouterr().out
+    assert "❌ smartctl --scan" in out
+    assert "原因：写/非只读命令被执行门拒绝" in out
+    assert "排查1" in out
+
+
+# 注：execute_mixed 的 rec 字段契约（for_skills / out 预截 / out_nlines）
+# 属 sweep 层，测试落在 test_mixed_sweep.py（那边的 _plan_for/FactStore 基建同源）。

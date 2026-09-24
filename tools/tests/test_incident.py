@@ -86,7 +86,7 @@ def test_render_dossier_three_columns():
                   {"rows": [{"target": "/data", "pcent": 40}]}, now=1.0)
     inc.dry_run(now=1.0)
     txt = inc.render_dossier(now=1.0)
-    assert "诊断卷宗" in txt and "已证实" in txt
+    assert "诊断卷宗" in txt and "已排查" in txt
 
 
 def test_handover_and_report_export():
@@ -103,7 +103,7 @@ def test_handover_and_report_export():
     assert ho["symptom"] and ho["facts"] and ho["timeline"]
     # 报告导出为 markdown，含结论段
     md = inc.export_report(now=1.0)
-    assert md.startswith("# 故障报告") and "已证实" in md
+    assert md.startswith("# 故障报告") and "已排查" in md
 
 
 def test_next_action_none_when_gated_by_ask():

@@ -214,6 +214,89 @@ def test_remote_runner_exception_records_nonempty_error(tmp_path, monkeypatch):
     assert "err" in r and str(r["err"]) != ""   # 异常 str 为空时也不能是空串
 
 
+# ---------- C：on_result 逐条回调（流式展示，不攒批）----------
+
+def test_mixed_on_result_called_per_probe(tmp_path, monkeypatch):
+    """on_result 每条探针出结果即调一次，dict 与 executed 终态同形；
+    手动桶探针不触发回调（没有"结果"）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    store = FactStore()
+    # 两波：本机 auto 一条 + 远程已授权一条 + 远程未授权（进 manual）一条
+    plan_local = _plan_for(LOCAL)
+    plan_r1 = _plan_for("web-01")
+    plan_r2 = _plan_for("web-02")
+    plan = {"target": "mixed",
+            "waves": plan_local["waves"] + plan_r1["waves"] + plan_r2["waves"]}
+    seen = []
+
+    def slow_remote(tn, cmd, pr):
+        # 远程迟一拍返回——on_result 必须在本条返回时立刻被调，而非全轮结束
+        seen.append(("call", tn))
+        return f"out:{tn}"
+
+    res = sweep.execute_mixed(plan, {}, store, now="T",
+                              local_runner=lambda c: "x",
+                              remote_runner=slow_remote,
+                              authorized=lambda n: n == "web-01",
+                              on_result=lambda r: seen.append(("result", r)))
+    results = [x for x in seen if x[0] == "result"]
+    assert len(results) == 2                       # 本机 + web-01；web-02 进 manual 无回调
+    # 回调时序：本机探针立即出 result；远程 call 后紧跟本条 result（逐条，非攒批）
+    order = [x[0] for x in seen]
+    assert order == ["result", "call", "result"], seen
+    # 回调收到的 dict 与 executed 中的对象同形
+    assert all(r[1]["status"] == "executed" for r in results)
+    assert {r[1].get("target") for r in results} == {LOCAL, "web-01"}
+
+
+def test_mixed_on_result_exception_does_not_break_sweep(tmp_path, monkeypatch):
+    """展示层回调抛异常绝不打断取证（证据照常入库、返回值完整）。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    store = FactStore()
+    plan = _plan_for("web-01")
+    res = sweep.execute_mixed(plan, {}, store, now="T",
+                              local_runner=lambda c: "x",
+                              remote_runner=lambda tn, c, p: "y",
+                              authorized=lambda n: True,
+                              on_result=lambda r: 1 / 0)
+    assert len(res["executed"]) == 1 and res["executed"][0]["status"] == "executed"
+
+
+def test_mixed_rec_carries_for_skills_and_out_head(tmp_path, monkeypatch):
+    """#35：rec 必须（a）带 for_skills（evidence.build_plan 合并期定型）；
+    （b）out 只存预截前 3 行 × 120 字符（截好再存，不持全文引用）；
+    （c）out_nlines 是诚实总行数；（d）on_result 收到的是同一条 rec。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    store = FactStore()
+    plan = _plan_for("web-01")
+    captured = []
+    res = sweep.execute_mixed(plan, {}, store, now="T",
+                              local_runner=lambda c: "x",
+                              remote_runner=lambda tn, c, p: "v1\nv2\nv3\nv4\nv5",
+                              authorized=lambda n: True,
+                              on_result=captured.append)
+    rec = res["executed"][0]
+    assert rec["for_skills"] == ["test.host.x"]     # build_plan 合并期记录
+    assert rec["out"] == "v1\nv2\nv3"
+    assert rec["out_nlines"] == 5
+    assert captured and captured[0] is rec
+
+
+def test_mixed_out_head_caps_line_and_char(tmp_path, monkeypatch):
+    """预截双上限：>3 行取前 3；单行 >120 字符截断——rec 里永不出现全文。"""
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    store = FactStore()
+    plan = _plan_for("web-01")
+    long_line = "x" * 500
+    res = sweep.execute_mixed(plan, {}, store, now="T",
+                              local_runner=lambda c: "x",
+                              remote_runner=lambda tn, c, p: long_line,
+                              authorized=lambda n: True)
+    rec = res["executed"][0]
+    assert len(rec["out"]) == 120                   # 120 字符上限
+    assert rec["out_nlines"] == 1
+
+
 def test_gate_audits_connector_exception(tmp_path, monkeypatch, tmp_path_factory):
     """连接器异常（如执行超时）必须审计（decision=error）——命令已打到远端，
     无痕即盲区（真机：find 全盘超时在 remote.jsonl 无任何记录）。"""

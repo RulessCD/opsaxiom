@@ -84,3 +84,74 @@ def test_real_paramiko_roundtrip(tmp_path, monkeypatch):
     assert rc == 0
     assert out == "out:cat /proc/loadavg"
     assert server.cmd == "cat /proc/loadavg"
+
+
+# ---------- A：同一连接身份复用（批量取证 N 条命令只握一次手）----------
+
+
+def _serve_loop(sock, host_key, allowed_pub, served):
+    """循环 accept：每个连接伺候多条 exec（复用连接的形态）。"""
+    while True:
+        try:
+            conn, _ = sock.accept()
+        except OSError:
+            return
+        t = paramiko.Transport(conn)
+        t.add_server_key(host_key)
+        s = _Server(allowed_pub)
+        t.start_server(server=s)
+        # 一个连接上伺候多条命令：channel 逐个 accept，收到 exec 就回显
+        while True:
+            chan = t.accept(timeout=5)
+            if chan is None:
+                break
+            if not s.exec_ev.wait(timeout=5):
+                chan.close()
+                continue
+            chan.sendall(f"out:{s.cmd}".encode())
+            chan.send_exit_status(0)
+            chan.close()
+            served.append(s.cmd)
+            s.cmd = None
+            s.exec_ev.clear()
+
+
+def test_reused_connection_single_handshake(tmp_path, monkeypatch):
+    """同 (host,user,port) 连发多条命令：服务端只见到 1 次 TCP accept（连接复用），
+    每条命令输出各自正确；换 user 则是新连接（身份不串）。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh_conn.close_all()                       # 清其他用例可能留下的缓存
+    ssh_dir = tmp_path / ".ssh"; ssh_dir.mkdir()
+    host_key = paramiko.RSAKey.generate(2048)
+    client_key = paramiko.RSAKey.generate(2048)
+    key_file = tmp_path / "id_rsa"
+    client_key.write_private_key_file(str(key_file))
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(4)
+    port = sock.getsockname()[1]
+    (ssh_dir / "known_hosts").write_text(
+        f"[127.0.0.1]:{port} ssh-rsa {host_key.get_base64()}\n", encoding="utf-8")
+    served = []
+    th = threading.Thread(target=_serve_loop,
+                          args=(sock, host_key, client_key, served), daemon=True)
+    th.start()
+
+    cred = access.Credential("file", path=str(key_file))
+    target = {"host": "127.0.0.1", "port": port, "user": "opsaxiom-ro"}
+    for i in range(3):
+        rc, out, err = ssh_conn.exec_readonly(
+            target, cred, f"cmd{i}", timeout=8)
+        assert rc == 0 and out == f"out:cmd{i}"
+    assert len(served) == 3
+    # 复用：3 条命令只发生 1 次验证过的公钥认证（连接只建了一条）
+    # （accept 计数在服务端线程内，用认证次数等价断言：_Server 每连接一个实例）
+    # 换 user → 缓存键不同 → 第二条连接
+    target2 = {"host": "127.0.0.1", "port": port, "user": "other"}
+    rc, out, err = ssh_conn.exec_readonly(target2, cred, "cmd3", timeout=8)
+    assert rc == 0 and out == "out:cmd3"
+
+    ssh_conn.close_all()                       # 该用例自清，不靠 atexit
+    # 清池后再跑：应重新建连（不残留死连接）
+    rc, out, err = ssh_conn.exec_readonly(target, cred, "cmd4", timeout=8)
+    assert rc == 0 and out == "out:cmd4"

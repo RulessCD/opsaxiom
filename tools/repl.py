@@ -28,6 +28,7 @@ import incident as I   # noqa: E402  交互 v2：取证式诊断
 import sweep           # noqa: E402
 import access          # noqa: E402  远程目标清单加载
 import gate            # noqa: E402  远程执行门
+from connectors import ssh_conn  # noqa: E402  SSH 连接复用（close_all 清池）
 import llm             # noqa: E402  可选 LLM 适配层（无模型时全走降级）
 import run_sim         # noqa: E402  复用 _is_readonly
 
@@ -289,6 +290,9 @@ class Repl:
         except KeyboardInterrupt:
             print("\n  ⏸ 已中断本次诊断（进度已存）。输入 resume 可继续，或继续描述别的问题。")
             return
+        finally:
+            if self.target_mode == "remote":
+                ssh_conn.close_all()                   # 本轮复用连接收尾（A）
         if res["outcome"] == "quit":
             print("  已退出本次诊断（进度已存，输入 resume 继续）。")
 
@@ -797,7 +801,7 @@ class Repl:
         print("  已从你的描述识别到以下信息（回车确认；不对就输正确的值）：")
         for k, v in got.items():
             try:
-                nv = input(f"  {desc_of.get(k, k)} [{v}]: ").strip()
+                nv = input(f"  {desc_of.get(k, k)} [已识别：{v}]: ").strip()
             except (EOFError, KeyboardInterrupt):
                 nv = ""
             if nv:
@@ -1009,13 +1013,15 @@ class Repl:
             h.params.update(params)
         plan = inc.plan()
         probes = sweep.flatten(plan)
+        # #36 本机同口径：目标列/排查列预判（本机恒单目标——目标列自然不打）
+        self._probe_cfg = self._probe_label_ctx(inc)
 
         # 分类
         autoable = [p for p in probes if p["auto"] and runtime.MISSING not in p["cmd"]]
         need_param = [p for p in probes if runtime.MISSING in p["cmd"]]
         need_manual = [p for p in probes if not p["auto"] and runtime.MISSING not in p["cmd"]]
 
-        # 1. 自动执行能自动的（白名单内只读 + 参数齐全）
+        # 1. 自动执行能自动的（白名单内只读 + 参数齐全）；流式展示同远程（#36）
         if autoable:
             if not sweep.is_trusted(I.LOCAL):
                 print(f"  本机可自动执行 {len(autoable)} 条只读取证命令（绝不含写操作）。")
@@ -1026,19 +1032,19 @@ class Repl:
                 if ans.lower() in ("y", "yes", "是"):
                     sweep.grant_trust(I.LOCAL)
             if sweep.is_trusted(I.LOCAL):
-                print(f"  ▶ 自动执行 {len(autoable)} 条只读命令…")
+                print(f"  ▶ 自动执行 {len(autoable)} 条只读命令…\n")
                 filtered = {"target": plan["target"],
                             "waves": [{"wave": 0, "probes": autoable}]}
-                sweep.execute_auto(filtered, inc.params, inc.store)
+                sweep.execute_auto(filtered, inc.params, inc.store,
+                                   on_result=self._show_probe_result)
 
-        # 2. 列出全部指令 + 状态
-        print("\n  ── 取证指令 ──")
-        for p in autoable:
-            print(f"  ✅ 已自动执行    {p['cmd'][:68]}")
-        for p in need_manual:
-            print(f"  ⏳ 需手动（指令不在白名单）  {p['cmd'][:68]}")
-        for p in need_param:
-            print(f"  ❓ 需补充用户参数  {p['cmd'][:68]}")
+        # 2. 需手动 / 需补参数的预告清单（自动段已流式打 ✅，此处不再重复）
+        pending_preview = [(f"⏳ 需手动（指令不在白名单）", p) for p in need_manual] + \
+                          [(f"❓ 需补充用户参数", p) for p in need_param]
+        if pending_preview:
+            print(f"\n  ── 需手动 / 需补参数 {len(pending_preview)} 条 ──")
+            for label, p in pending_preview:
+                print(f"  {label}  {p['cmd'][:68]}")
 
         # 3. 回车确认，逐条处理不能自动的
         if need_manual or need_param:
@@ -1244,6 +1250,9 @@ class Repl:
         except KeyboardInterrupt:
             print("\n  ⏸ 已中断本次处置（进度已存）。输入 resume 可继续。")
             return
+        finally:
+            if self.target_mode == "remote":
+                ssh_conn.close_all()                   # 本轮复用连接收尾（A）
         if res["outcome"] == "quit":
             print("  已退出本次处置（进度已存，输入 resume 继续）。")
 
@@ -1291,6 +1300,93 @@ class Repl:
             return True
         return False
 
+    # ---- #35 执行行五要素：状态/指令/排查标签/目标/结果预览 ----
+    # 目标列与排查列都按"本轮事实动态去重"：整轮取值无差异就不打（单例行
+    # 更清爽）；有差异就全打（哪怕某条独占——对比一眼可见）。整轮格式恒定，
+    # 不出现中流跳变。假说序号 = 候选菜单序号（顺序沿 hits→hyps 传递不洗牌）。
+
+    def _probe_label_ctx(self, inc):
+        """取证前预判两列是否展示 + id→短名映射。纯读 incident，零副作用。"""
+        id2n = {h.meta["id"]: i + 1 for i, h in enumerate(inc.hyps)}
+        show_target = False
+        show_rank = False
+        try:
+            targets = {p["target"] for p in sweep.flatten(inc.plan())}
+            show_target = len(targets) > 1
+        except Exception:
+            show_target = False
+        if len(inc.hyps) > 1:
+            # 归属有差异才打：全部指令都服务同一假说集合时这列无信息量。
+            # plan 尚未执行也能判：for_skills 在 build_plan 合并期就定型。
+            try:
+                sets = {tuple(sorted(p.get("for_skills", [])))
+                        for p in sweep.flatten(inc.plan())}
+                show_rank = len(sets) > 1
+            except Exception:
+                show_rank = False
+        return {"id2n": id2n, "show_target": show_target, "show_rank": show_rank}
+
+    def _probe_tag(self, r, id2n, show_rank):
+        """"排查n"标签：for_skills 的 id 映射成候选菜单序号，升序 + 相加。"""
+        if not show_rank:
+            return ""
+        nums = sorted(id2n.get(sid, 99) for sid in r.get("for_skills", []))
+        if not nums or nums == [99]:
+            return "排查?"
+        return "+" .join(f"排查{n}" for n in nums)
+
+    @staticmethod
+    def _value_hint(r):
+        """结果体（#35 二版发起人裁定 2026-09-24）：既单行值 or 前 3 行明细。
+        单行标量直接值（≤60 字符截防超长）；多行保留真实换行（调用方逐行
+        缩进打印，⏎ 折叠已弃）；空串返回 None（调用方打"返回结果：空"）。
+        只展示不推断（R9 边界不动）。"""
+        out = r.get("out") or ""
+        n = r.get("out_nlines") or 0
+        if not out:
+            return ""
+        return out[:60] if ("\n" not in out and n <= 1) else out
+
+    def _show_probe_result(self, r):
+        """C+#35（流式展示，发起人 2026-09-24 定稿二版结构）：
+        第一行 = 状态+指令+⟦对象⟧⟦排查N⟧（单目标/单假说按预判隐藏，整轮恒定）；
+        第二行起 = "返回结果：" + 明细（单标量直排；多行保留真换行、逐行缩进、
+        超 3 行给 …（共 N 行）；空输出打"返回结果：空"）。旧 `→ 衔接` 退役。
+        展示层异常绝不打断取证——任何打印问题都吞掉（证据照常入库）。"""
+        cfg = getattr(self, "_probe_cfg", {})
+        ind = "\n       "
+        try:
+            if r.get("status") == "executed":
+                meta = ""
+                if cfg.get("show_target"):
+                    meta += f" ⟦{r.get('target', '')}⟧"
+                tag = self._probe_tag(r, cfg.get("id2n", {}),
+                                      cfg.get("show_rank", False))
+                if tag:
+                    meta += f" ⟦{tag}⟧"
+                print(f"  ✅ {r['cmd'][:60]}{meta}", flush=True)
+                hint = self._value_hint(r)
+                if not hint:
+                    print("       返回结果：空", flush=True)
+                elif "\n" in hint or (r.get("out_nlines") or 0) > 1:
+                    # 多行明细须与首行同缩进——"返回结果："若与首行数据同行，
+                    # 首行多出 10 列前缀会把 df 这类自带列对齐的表格拦腰错位，
+                    # 故引导词独占一行，明细逐行 7 格前缀。
+                    n = r.get("out_nlines") or 0
+                    tail = f"\n       …（共 {n} 行）" if n > 3 else ""
+                    body = ind.join(hint.splitlines()[:3])
+                    print("       返回结果：", flush=True)
+                    print(f"       {body}{tail}", flush=True)
+                else:
+                    print(f"       返回结果：{hint[:60]}", flush=True)
+            else:
+                tag = self._probe_tag(r, cfg.get("id2n", {}), cfg.get("show_rank", False))
+                meta = f" ⟦{tag}⟧" if tag else ""
+                print(f"  ❌ {r['cmd'][:60]}{meta}\n"
+                      f"     原因：{str(r.get('err', r.get('status')))[:200]}", flush=True)
+        except Exception:
+            pass
+
     def _sweep_remote(self, inc):
         """远程取证流程：
         1. 调 mixed_sweep（本机探针走 bash，远程已授权走 gate，未授权进 manual）
@@ -1306,26 +1402,18 @@ class Repl:
         for h in inc.hyps:
             h.params.update(params)
 
-        # 混合取证：authorized 回调带交互
+        # 混合取证：authorized 回调带交互；on_result 流式展示（C：跑完一条
+        # 打一条，不再攒批等全部跑完才见 ✅）；#35 目标列/排查列取值预判。
+        self._probe_cfg = self._probe_label_ctx(inc)
+        print("\n  ── 自动取证结果 ──")
         res = inc.mixed_sweep(
             remote_runner=lambda tn, cmd, pr: gate.run_remote(tn, cmd, params=pr),
-            authorized=lambda name: self._ensure_authorized(name, inc)
+            authorized=lambda name: self._ensure_authorized(name, inc),
+            on_result=self._show_probe_result,
         )
 
         executed = res["executed"]
         manual = res["manual"]
-
-        # 展示：已自动执行的
-        if executed:
-            print("\n  ── 自动取证结果 ──")
-            for r in executed:
-                if r["status"] == "executed":
-                    fields_hint = ", ".join(r.get("fields", [])[:4])
-                    print(f"  ✅ {r.get('target',''):<12} {r['cmd'][:60]}"
-                          f"{' → ' + fields_hint if fields_hint else ''}")
-                else:
-                    print(f"  ❌ {r.get('target',''):<12} {r['cmd']}\n"
-                          f"     原因：{str(r.get('err', r['status']))[:200]}")
 
         # 手动桶：逐条交互。自动执行失败/超时的探针并入贴回——不晾在 ❌ 上，
         # 慢命令（如全盘 find）超时后由人工执行补齐证据。
@@ -1386,6 +1474,8 @@ class Repl:
         self._narrate_dossier(inc)
         self._offer_treatment(inc)
         self.last_incident_swept = True
+        if self.target_mode == "remote":
+            ssh_conn.close_all()                       # 本轮复用连接收尾（A）
 
     def _report(self, share=False):
         if not self.last_incident:
