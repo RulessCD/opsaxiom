@@ -13,7 +13,7 @@
 用      opsaxiom                # ← 就这一个词！进入交互态，敲字说问题即可
           axiom> 磁盘满了但df有空间     # 直接说问题，列出候选
           axiom> 1                      # 输序号，进入逐步排查
-          axiom> help / list / info <id> / resume / doctor / quit
+          axiom> help / list / info <id> / doctor / quit
 沉淀    排查完顺手答一句认证；没走skill就 record；老经验用 skill new
 拿/发   axiom> hub search 磁盘   → hub pull <id>   ；发布 hub push <id>
 体检    opsaxiom doctor         # 红=必修 黄=可用但受限
@@ -122,8 +122,8 @@ axiom> 磁盘满了但 df 显示还有空间 mount=/data
   1) 确认，我亲自执行  2) 跳过此步  3) 升级人工  4) 退出会话
 ```
 
-写操作**永远由你亲手执行**，它不代按。选 4 退出后，在 `axiom>` 提示符输 `resume`
-就能从中断处接着来。
+写操作**永远由你亲手执行**，它不代按。任何时候 Ctrl-C 都会取消本轮操作、
+回到命令输入。
 
 **4) 查完，顺手把这次经历沉淀下来（见第三章）。**
 

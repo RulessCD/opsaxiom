@@ -4,7 +4,7 @@ Terminal REPL —— OpsAxiom 默认交互入口（W-1，docs/08 §4.2a）。
 心智模型：像跟老师傅说话，不像查手册。裸敲 `opsaxiom` 就进来，敲字（说人话）就有反应。
 - 非命令输入 = 症状 → diagnose top-3（自然语言是一等公民）
 - 纯数字 = 选上次候选 → 原地进导航档（复用 runtime.Session，同进程）
-- 少量内置词（可选，不学也能用）：help/list/info/run/doctor/hub/record/resume/quit
+- 少量内置词（可选，不学也能用）：help/list/info/run/doctor/hub/record/quit
 - Ctrl-C 中断当前 Skill 回提示符；空闲再 Ctrl-C/quit 退出。无 TTY 不进 REPL。
 
 REPL 不复制任何业务逻辑：diagnose/run/attest 全走既有模块。
@@ -291,13 +291,13 @@ class Repl:
         try:
             res = sess.run(start=start)
         except KeyboardInterrupt:
-            print("\n  ⏸ 已中断本次诊断（进度已存）。输入 resume 可继续，或继续描述别的问题。")
+            print("\n  ✋ 已取消，请输入新的指令。")
             return
         finally:
             if self.target_mode == "remote":
                 ssh_conn.close_all()                   # 本轮复用连接收尾（A）
         if res["outcome"] == "quit":
-            print("  已退出本次诊断（进度已存，输入 resume 继续）。")
+            print("  已退出本次诊断。")
 
     def _resume_pick(self):
         sd = _home() / "sessions"
@@ -995,7 +995,15 @@ class Repl:
         return params
 
     def _sweep_incident(self):
-        """批量取证：远程模式走 execute_mixed + gate，本机/手动保留现有逐条逻辑。"""
+        """批量取证（v2 主线）：已陈诉未取证时，回车/输入 sweep 进入。
+        Ctrl-C = 取消本轮取证（已执行条目已入库不回滚），回提示符。"""
+        try:
+            self._sweep_incident_inner()
+        except KeyboardInterrupt:
+            print("\n  ✋ 已取消，请输入新的指令。")
+
+    def _sweep_incident_inner(self):
+        """批量取证本体：远程模式走 execute_mixed + gate，本机/手动保留现有逐条逻辑。"""
         inc = self.last_incident
         if not inc:
             print("  先描述一个问题，我才好取证。")
@@ -1251,13 +1259,13 @@ class Repl:
         try:
             res = sess.run()
         except KeyboardInterrupt:
-            print("\n  ⏸ 已中断本次处置（进度已存）。输入 resume 可继续。")
+            print("\n  ✋ 已取消，请输入新的指令。")
             return
         finally:
             if self.target_mode == "remote":
                 ssh_conn.close_all()                   # 本轮复用连接收尾（A）
         if res["outcome"] == "quit":
-            print("  已退出本次处置（进度已存，输入 resume 继续）。")
+            print("  已退出本次处置。")
 
     # ---------- 远程取证 ----------
     _wl_notice_shown = None          # 白名单档提示每目标只打一次（execute_mixed 每探针查授权）
@@ -1391,12 +1399,18 @@ class Repl:
             pass
 
     def _sweep_remote(self, inc):
-        """远程取证流程：
+        """远程取证流程（Ctrl-C = 取消本轮，已执行条目已入库不回滚）：
         1. 调 mixed_sweep（本机探针走 bash，远程已授权走 gate，未授权进 manual）
         2. 展示已自动执行的结果（逐条 ✅）
         3. 对 manual 桶里的探针逐条交互（保持与现有手动模式一致的体验）
         4. 干跑 + 卷宗
         """
+        try:
+            self._sweep_remote_inner(inc)
+        except KeyboardInterrupt:
+            print("\n  ✋ 已取消，请输入新的指令。")
+
+    def _sweep_remote_inner(self, inc):
         # 补参数：两段式之②（#33）定向抽取 → 不足部分 _collect_params 问询兜底
         skills = [h.skill for h in inc.hyps]
         self._llm_targeted_intake(inc.symptom, skills, inc.params)
