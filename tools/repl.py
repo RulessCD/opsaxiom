@@ -34,6 +34,12 @@ import run_sim         # noqa: E402  复用 _is_readonly
 
 _BADGE = {"draft": "⚪草稿", "sim_verified": "🔵已验证",
           "field_verified": "🟢实地", "certified": "🟡认证"}
+
+# report 头部"- 结论"的系统提示（#39）：一句人话、限字数；输出过 redact 再进报告
+_REPORT_CONCLUSION_SYS = (
+    "你是运维诊断助手。输入是一轮批量排查的判读结果（JSON）。"
+    "请用不超过80字、面向一线运维的口吻概括：这轮查出的结论是什么、下一步建议。"
+    "不要罗列所有假设，只讲最重要的判断。直接输出正文，不要前后缀。")
 _BUILTINS = {"help", "?", "list", "info", "run", "doctor", "hub", "record",
              "skill", "resume", "quit", "exit", "q", "sweep", "report", "model",
              "sug", "auth", "overlay", "new", "edit",
@@ -268,13 +274,10 @@ class Repl:
                 except gate.GateRemoteNotAllowed as e:
                     raise runtime.RemoteNotAllowed(str(e)) from e
             remote_runner = _routed_remote
-            mode_label = "远程执行模式（自动在目标上跑命令）"
         elif self.target_mode == "manual":
             remote_runner = None
-            mode_label = "指引模式（我只出分析结论和方案，动手由你亲自来）"
         else:
             remote_runner = None
-            mode_label = "指引模式（我只出分析结论和方案，动手由你亲自来）"
 
         sess = runtime.Session(p, params=params, mode="guided", io=io, sid=session_id,
                                remote_runner=remote_runner)
@@ -284,7 +287,7 @@ class Repl:
             if not start:
                 print("  没有可续跑的进度。")
                 return
-        print(f"\n进入：{s['metadata']['name']}（{mode_label}）")
+        print(f"\n进入：{s['metadata']['name']}")
         try:
             res = sess.run(start=start)
         except KeyboardInterrupt:
@@ -1126,7 +1129,7 @@ class Repl:
                    if h.status == I.CONFIRMED and h.pending]
         if not pending:
             if all(h.status != I.CONFIRMED for h in inc.hyps):
-                print("  未证实任何假设。输入 report 导出移交卷宗，转人工/强模型接手。")
+                print("  未证实任何假设。输入 report 可导出卷宗。")
                 if self.model_cfg is not None:       # escalate 助理：只荐库内 id（R8/R10）
                     sid = llm.suggest_skill(inc.handover(), self.idx, config=self.model_cfg)
                     if sid:
@@ -1170,7 +1173,7 @@ class Repl:
                      if h.status == I.CONFIRMED
                      and (h.terminal or "").startswith("done:")]
         if not ans:
-            print("  好。结论与证据都在上方卷宗，可随时 report 导出移交。")
+            print("  好。结论与证据都在上方卷宗。输入 report 可导出卷宗。")
             return
         if ans.lower() not in ("y", "yes", "是"):
             print("  已记录你的反馈。")
@@ -1244,7 +1247,7 @@ class Repl:
                                sid=h.meta["id"].replace(".", "_") + "-repl",
                                remote_runner=remote_runner,
                                facts=inc.store, facts_target=inc.target)
-        print(f"\n进入：{h.meta['name']}（导航档，已带 {len(inc.store.evidence())} 条已采集证据）")
+        print(f"\n进入：{h.meta['name']}")
         try:
             res = sess.run()
         except KeyboardInterrupt:
@@ -1466,6 +1469,7 @@ class Repl:
                 stdout = self._read_until_end()
                 if stdout.strip():
                     sweep._store_result(inc.store, p, stdout)
+            inc._t("manual_paste", n=len(manual_items))   # 时间线：转人工完成（#39）
 
         # 干跑 + 卷宗
         inc.dry_run()
@@ -1477,13 +1481,59 @@ class Repl:
         if self.target_mode == "remote":
             ssh_conn.close_all()                       # 本轮复用连接收尾（A）
 
-    def _report(self, share=False):
+    def _report(self):
         if not self.last_incident:
-            print("  还没有可导出的排查。先描述问题并 sweep。")
+            print("  当前无可导出的卷宗。请先描述问题并完成批量排查后，再输入 report 导出。")
             return
+        inc = self.last_incident
+        # 空壳守门（#39）：没取证就 report，三桶全空，导出没有内容
+        if not any(inc.hyps):
+            print("  当前无可导出的卷宗。请先描述问题并完成批量排查后，再输入 report 导出。")
+            return
+        d = inc.dossier()
+        if not any(d[b] for b in ("confirmed", "refuted", "insufficient")):
+            print("  当前无可导出的卷宗。请先描述问题并完成批量排查后，再输入 report 导出。")
+            return
+        try:
+            ans = input("  是否脱敏导出（剥离个人注记/内网地址）？ [y/N]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        share = ans.lower() in ("y", "yes", "是")
         if share:
-            print("  （--share：已剥离个人 overlay 注记与内网地址，可放心贴工单/发社区）")
-        print(self.last_incident.export_report(share=share))
+            print("  （已剥离个人注记与内网地址，可放心贴工单/发社区）")
+        # "- 结论"：展示层现场调模型（capt 限字数）；未接模型/超时/降级 → 整行不出现。
+        # 模块层不碰 llm（export_report 只收现成字符串），测试不被模型调用缠住。
+        conclusion = self._llm_report_conclusion(inc)
+        print(inc.export_report(share=share, conclusion=conclusion))
+
+    def _llm_report_conclusion(self, inc):
+        """模型对这轮诊断的 ≤80 字总结（#39 头部"- 结论"）。model 未接/任何异常
+        → 空串（整行不出现，不留半截）。返回前过 redact（与 narrate 同规）。"""
+        if self.model_cfg is None:
+            return ""
+        d = inc.dossier()
+        rows = []
+        for bucket in ("confirmed", "refuted", "insufficient"):
+            for it in d.get(bucket, []):
+                ev = it["evidence"][0] if it["evidence"] else None
+                rows.append({"bucket": bucket, "name": it["name"],
+                             "conclusion": it["conclusion"] or "",
+                             "evidence": (f"{ev['field']}={ev['value']}" if ev else "")})
+        if not rows:
+            return ""
+        import json as _json
+        import redact as _redact
+        prompt = _redact.redact(
+            "症状：" + (inc.symptom or "") + "\n" +
+            "请用不超过80字概括这轮诊断的结论与下一步建议，不要罗列全部细节。"
+            + _json.dumps(rows, ensure_ascii=False))
+        try:
+            out = llm.backend_call(self.model_cfg, prompt, _REPORT_CONCLUSION_SYS)
+        except Exception:
+            return ""
+        if out and out.strip():
+            return " ".join(out.strip().split())[:160]
+        return ""
 
     def _delegate(self, parts):
         """hub/record/skill/doctor 交给既有 CLI 模块处理（复用，不复制）。"""

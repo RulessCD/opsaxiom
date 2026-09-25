@@ -440,3 +440,101 @@ def test_probe_row_error_keeps_reason_and_tag(capsys):
 
 # 注：execute_mixed 的 rec 字段契约（for_skills / out 预截 / out_nlines）
 # 属 sweep 层，测试落在 test_mixed_sweep.py（那边的 _plan_for/FactStore 基建同源）。
+
+
+# ---------- #39 report 导出重构：交互脱敏 / 空壳守门 / LLM 结论行 ----------
+
+def _swept_inc(monkeypatch):
+    """一个已干跑完的 incident（disk-full 树 + 96% 事实 → 已排查实例）。"""
+    import incident as I
+    inc = I.Incident("/var 满了", params={"mount": "/data"}, target="web-01")
+    inc.add_hypotheses([I.load_skill_by_id("host.storage.capacity.disk-full")[1]])
+    inc.seed_fact("df -B1 --output=target,size,used,avail,pcent /data",
+                  {"rows": [{"target": "/data", "pcent": 96}]}, now=1_000_000.0)
+    inc.seed_fact("df -i -P /data", {"rows": [{"ipcent": 99}]}, now=1_000_000.0)
+    inc.seed_fact(
+        "find /data -xdev -type d -exec sh -c 'echo \"$(ls -a \"$1\" | wc -l) $1\"' _ {} \\; 2>/dev/null | sort -rn | head -10",
+        {"rows": [{"path": "/data/sess", "n": 500000}]}, now=1_000_000.0)
+    inc.dry_run(now=1_000_000.0)
+    return inc
+
+
+def test_report_no_incident_prints_hint(capsys):
+    """没陈述过症状 → report 无从导出。"""
+    r = repl.Repl()
+    r._report()
+    assert "当前无可导出的卷宗" in capsys.readouterr().out
+
+
+def test_report_unswept_gated_not_empty_shell(monkeypatch, capsys):
+    """陈过述没取证 → 不打空骨架，守门提示"当前无可导出的卷宗"。"""
+    import incident as I
+    r = repl.Repl()
+    r.last_incident = I.Incident("卡")
+    r.last_incident.add_hypotheses([])
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    r._report()
+    out = capsys.readouterr().out
+    assert "当前无可导出的卷宗" in out
+    assert "# 故障报告" not in out
+
+
+def test_report_interactive_share_prompt(monkeypatch, capsys):
+    """输入 report → 先问脱敏（回车=否）；y 走 share 剥离。
+    问询文案是 input() 的 prompt 参数（不进 stdout），断言捕获参数本身。"""
+    r = repl.Repl()
+    r.last_incident = _swept_inc(monkeypatch)
+    r.model_cfg = None
+    seen = []
+    monkeypatch.setattr("builtins.input", lambda *a: (seen.append(a[0] if a else ""), "")[1])
+    r._report()
+    out = capsys.readouterr().out
+    assert seen and "是否脱敏导出" in seen[0]
+    assert "# 故障报告" in out
+    # y → share 版（本例无个人层内容可剥，只验 share True 出报告且不炸）
+    monkeypatch.setattr("builtins.input", lambda *a: "y")
+    r._report()
+    assert "# 故障报告" in capsys.readouterr().out
+
+
+def test_report_without_model_omits_conclusion_line(monkeypatch, capsys):
+    """未接模型 → 头部无"- 结论"行（其余节照出）。"""
+    r = repl.Repl()
+    r.last_incident = _swept_inc(monkeypatch)
+    r.model_cfg = None
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    r._report()
+    out = capsys.readouterr().out
+    assert "- 结论：" not in out
+    assert "- 症状：" in out and "## 排查结果" in out
+
+
+def test_report_with_model_calls_and_redacts(monkeypatch, capsys):
+    """接模型 → 现场调 backend_call，返回值清洗后进"- 结论"；模型异常 → 整行不出现。"""
+    r = repl.Repl()
+    r.last_incident = _swept_inc(monkeypatch)
+    r.model_cfg = {"backend": "builtin"}
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    monkeypatch.setattr(repl.llm, "backend_call",
+                        lambda cfg, p, s: "  结论一句话。\n第二行不要 ")
+    r._report()
+    out = capsys.readouterr().out
+    assert "- 结论：结论一句话。 第二行不要" in out       # 换行折空格、去首尾
+    # 模型炸 → 整行不出现，不炸命令
+    monkeypatch.setattr(repl.llm, "backend_call",
+                        lambda cfg, p, s: (_ for _ in ()).throw(TimeoutError()))
+    r._report()
+    out2 = capsys.readouterr().out
+    assert "- 结论：" not in out2 and "# 故障报告" in out2
+
+
+def test_report_conclusion_line_absent_when_model_returns_empty(monkeypatch, capsys):
+    """模型返回空/纯空白 → 降级整行不出现（不留"- 结论："空壳）。"""
+    r = repl.Repl()
+    r.last_incident = _swept_inc(monkeypatch)
+    r.model_cfg = {"backend": "builtin"}
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    monkeypatch.setattr(repl.llm, "backend_call", lambda cfg, p, s: "  \n  ")
+    r._report()
+    out = capsys.readouterr().out
+    assert "- 结论：" not in out

@@ -168,6 +168,32 @@ class Session:
     def _log(self, node, ntype, **kw):
         self.audit.append({"node": node, "type": ntype, **kw})
 
+    def _show_result(self, stdout):
+        """查看层：把执行产物亮出来（#40 顺带，向 v2 流式取证看齐）。
+        单行直排；多行取 sweep._out_head 同款前 3 行逐行缩进；空输出明说。
+        展示层永不打断取证——打印问题一律吞掉。"""
+        try:
+            import sweep as _sweep
+            head, n = _sweep._out_head(stdout or "")
+            if not head:
+                self.io._p("       返回结果：空")
+            elif n > 1:
+                tail = f"\n       …（共 {n} 行）" if n > 3 else ""
+                print("       返回结果：", flush=True)
+                print("\n".join(f"       {ln}" for ln in head.splitlines()) + tail, flush=True)
+            else:
+                self.io._p(f"       返回结果：{head}")
+        except Exception:
+            pass
+
+    def _next_step_label(self, node_id):
+        """跳转目标的"人话"名：真实节点给 title，done/escalate 返回 None
+        （结论块马上就到，不用预告）。兜底：无 title 用裸 ID。"""
+        n = self.nodes.get(node_id)
+        if n is None:
+            return None                      # done/escalate/__quit__ 等控制 token
+        return self.r(n.get("title", "")) or node_id
+
     def _sess_dir(self):
         d = pathlib.Path(os.environ.get("OPSAXIOM_HOME", pathlib.Path.home() / ".opsaxiom")) / "sessions"
         d.mkdir(parents=True, exist_ok=True)
@@ -285,8 +311,11 @@ class Session:
         if cached is not None:
             self._absorb_parsed(cached["value"])
             self.io._p(f"▶ 复用已采集证据（{cached['source_cmd']}）")
+            self._show_result(json.dumps(cached["value"], ensure_ascii=False))
             nxt = self._eval_branch(n)
-            self.io._p(f"→ 判读结果：转 {nxt}")
+            tip = self._next_step_label(nxt)
+            if tip:
+                self.io._p(f"→ 下一步：{tip}")
             self._log(n["id"], "check", cmd=cmd, next=nxt,
                       output=self._summ(json.dumps(cached["value"], ensure_ascii=False)),
                       reused=True)
@@ -294,7 +323,7 @@ class Session:
         if self.remote_runner:
             # 远程模式：走 gate 自动执行（ro 目标白名单路由在 gate 侧；
             # 名单外命令会收到带降级提示的 GateError，这里转贴回）
-            self.io._p(f"▶ 远程执行（{self.sid}）：{cmd}")
+            self.io._p(f"▶ 远程执行：{cmd}")
             try:
                 stdout = self.remote_runner(cmd, self.ctx)
             except RemoteNotAllowed as e:
@@ -313,8 +342,11 @@ class Session:
         else:
             stdout = self.io.paste(n["id"], f"▶ 请执行并粘贴输出（END 结束）：\n  $ {cmd}")
         self._parse_into_ctx(n, stdout)
+        self._show_result(stdout)
         nxt = self._eval_branch(n)
-        self.io._p(f"→ 判读结果：转 {nxt}")
+        tip = self._next_step_label(nxt)
+        if tip:
+            self.io._p(f"→ 下一步：{tip}")
         self._log(n["id"], "check", cmd=cmd, next=nxt, output=self._summ(stdout))
         return nxt
 
@@ -361,7 +393,9 @@ class Session:
             self._log(n["id"], "action", risk=risk, decision=decision)
             if decision == "skip":
                 nxt = n.get("goto", "escalate")
-                self.io._p(f"→ 跳过此变更（未执行），继续：转 {nxt}。")
+                tip = self._next_step_label(nxt)
+                self.io._p(f"→ 跳过此变更（未执行）"
+                           + (f"，继续：{tip}。" if tip else "。"))
                 return nxt
             if decision == "quit":
                 self.io._p("→ 退出会话（进度已保存，可 --resume 续跑）。")
@@ -411,8 +445,8 @@ class Session:
         elif ans.lower() in ("n", "no", "否"):
             self._report_issue(n)
         else:
-            # 回车跳过 → 最可能要交棒他人：提示卷宗可导出（不发出任何东西）
-            self.io._p("好。结论与证据都在上方卷宗，可随时 report 导出移交。")
+            # 回车跳过 → 中性收尾（#39 裁定：v1 会话不在 incident 里，不念导出话术）
+            self.io._p("好。结论与证据都在上方。")
 
     def _has_gh_token(self):
         """薄壳：文件里有 token 即 True（不发请求）。细粒度状态走 ghutil.check_token。"""

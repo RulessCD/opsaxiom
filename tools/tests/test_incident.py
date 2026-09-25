@@ -101,9 +101,43 @@ def test_handover_and_report_export():
     # 移交卷宗带事实与时间线
     ho = inc.handover(now=1.0)
     assert ho["symptom"] and ho["facts"] and ho["timeline"]
-    # 报告导出为 markdown，含结论段
+    assert all(e.get("ts") for e in ho["timeline"])   # #39：时间线事件带 ts
+    # 报告导出为 markdown：头部五行 + 排查结果 + 时间线（#39 口径）
+    md = inc.export_report(now=1.0, conclusion="模型总结。")
+    assert md.startswith("# 故障报告：\n")
+    assert "## 排查结果" in md and "结论（已排查）" not in md
+    assert "- 时间：" in md and "- 目标：local（本机）" in md
+    assert "- 症状：" in md and "- 关键参数：mount=/data" in md
+    assert "- 结论：模型总结。" in md
+    assert "## 时间线" in md and "匹配到 1 个排查方法" in md
+    assert "## 处置" not in md and "状态与下一步" not in md
+
+
+def test_report_timeline_events_rendered_and_ts():
+    """#39：timeline 事件流水按事件类型渲染人话，无 ts 的旧条目跳过。"""
+    inc = _disk_full_incident({"mount": "/data"})
+    import time as _t
+    inc.timeline.append({"event": "mixed_sweep", "ts": _t.time(),
+                         "executed": 10, "manual_targets": ["web-01"]})
+    inc.timeline.append({"event": "legacy_event"})     # 无 ts → 跳过不渲染
+    md = inc.export_report(now=_t.time())
+    assert "自动取证 10 条（1 个目标转人工）" in md
+    assert "legacy_event" not in md
+
+
+def test_report_target_label_appends_ssh_os(tmp_path, monkeypatch):
+    """#39：目标行对远程目标附 ssh·os 括注（查 targets.yaml）；查不到只打名字。"""
+    import yaml as _yaml
+    monkeypatch.setenv("OPSAXIOM_HOME", str(tmp_path))
+    (tmp_path / "targets.yaml").write_text(_yaml.safe_dump({"targets": {
+        "高等云肆": {"connector": "ssh", "host": "1.2.3.4", "user": "root",
+                     "auth": "agent", "os": "linux"}}}, allow_unicode=True),
+        encoding="utf-8")
+    inc = I.Incident("磁盘满了", params={"mount": "/var"}, target="高等云肆")
     md = inc.export_report(now=1.0)
-    assert md.startswith("# 故障报告") and "已排查" in md
+    assert "- 目标：高等云肆（ssh · linux）" in md
+    inc2 = I.Incident("磁盘满了", params={}, target="不在清单")
+    assert "- 目标：不在清单" in inc2.export_report(now=1.0)
 
 
 def test_next_action_none_when_gated_by_ask():

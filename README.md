@@ -114,7 +114,7 @@ echo '{"alerts":[{"labels":{"alertname":"GPU 掉卡 XID 79"}}]}' | opsaxiom-webh
   注入防护 + 审计），探针自动远程执行，名单外/未授权/不可达的降级为逐条粘贴人工贴回；
   `cred set` 本地钥匙串存密码类凭证——**凭证不出本机，清单只存引用**。
 - **本地化 Skill**（docs/13）：linkbook 个人网页台账、overlay 叠加层（填 placeholder/贴注记，
-  不碰通用树）、fork 派生——**个人层结构性不出门**（打包/CI 拒收，`report --share` 自动剥离 📌 与内网地址）。
+  不碰通用树）、fork 派生——**个人层结构性不出门**（打包/CI 拒收，`report` 脱敏导出自动剥离 📌 与内网地址）。
 - **可选接模型**（只做理解/叙事/建议，永不出命令、不判分支）：
   本机小模型(Qwen2.5-0.5B)（`opsaxiom model pull` 本机离线跑，开箱备用）/ Ollama / OpenAI 兼容
   远程 API / **Pi Agent Harness 多 provider 网关**，`opsaxiom model` 一条命令切换，

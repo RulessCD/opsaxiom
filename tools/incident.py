@@ -16,6 +16,7 @@ Incident 会话与诊断卷宗（Z-4，docs/09 §1.3–1.5）——交互 v2 的
 """
 import pathlib
 import sys
+import time as _time
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -35,6 +36,10 @@ _BADGE = {"draft": "⚪草稿", "sim_verified": "🔵已验证",
 
 CONFIRMED, REFUTED, INSUFFICIENT, PENDING = \
     "confirmed", "refuted", "insufficient", "pending"
+
+
+def _now_ts():
+    return _time.time()
 
 
 def load_skill_by_id(skill_id):
@@ -82,10 +87,12 @@ class Incident:
         self.timeline = []
 
     def _t(self, event, **kw):
-        self.timeline.append({"event": event, **kw})
+        # ts（UNIX 秒）供 export_report 渲染时间线流水（#39）；now 可注入（测试）
+        self.timeline.append({"event": event, "ts": (now if (now := kw.pop("now", None))
+                                                    else _now_ts()), **kw})
 
     # ---- 陈述 → 候选假设 ----
-    def add_hypotheses(self, skill_dicts):
+    def add_hypotheses(self, skill_dicts, now=None):
         for s in skill_dicts:
             h = Hypothesis(s, self.params)
             # 叠加个人 overlay：本地参数并入（填 source:local 占位符），
@@ -99,7 +106,7 @@ class Incident:
                 for k, v in overlay.local_params(ov).items():
                     h.params.setdefault(k, v)
             self.hyps.append(h)
-        self._t("hypotheses", ids=[h.meta["id"] for h in self.hyps])
+        self._t("hypotheses", now=now, ids=[h.meta["id"] for h in self.hyps])
         return self
 
     @classmethod
@@ -125,7 +132,8 @@ class Incident:
         on_result：可选逐条回调（#36 本机流式对齐），透传 execute_auto。"""
         rep = sweep.execute_auto(self.plan(), self.params, self.store,
                                  now=now, runner=runner, on_result=on_result)
-        self._t("auto_sweep", executed=sum(1 for r in rep if r["status"] == "executed"))
+        self._t("auto_sweep", now=now,
+                executed=sum(1 for r in rep if r["status"] == "executed"))
         return rep
 
     def mixed_sweep(self, now=None, remote_runner=None, authorized=None, on_result=None):
@@ -138,7 +146,8 @@ class Incident:
                                   remote_runner=remote_runner, authorized=authorized,
                                   on_result=on_result)
         n = sum(1 for r in res["executed"] if r["status"] == "executed")
-        self._t("mixed_sweep", executed=n, manual_targets=sorted(res["manual"]))
+        self._t("mixed_sweep", now=now, executed=n,
+                manual_targets=sorted(res["manual"]))
         return res
 
     def paste_block(self, nonce, only_manual=True):
@@ -147,7 +156,8 @@ class Incident:
     def ingest(self, text, nonce, now=None):
         res = sweep.ingest(text, self.plan(), nonce, self.store,
                            params=self.params, now=now)
-        self._t("ingest", n=len(res["ingested"]), forged=res["ignored_forged"])
+        self._t("ingest", now=now, n=len(res["ingested"]),
+                forged=res["ignored_forged"])
         return res
 
     def seed_fact(self, cmd, parsed, now=None):
@@ -234,7 +244,8 @@ class Incident:
     def dry_run(self, now=None):
         for h in self.hyps:
             self._dry_run_one(h, now=now)
-        self._t("dry_run", confirmed=sum(h.status == CONFIRMED for h in self.hyps),
+        self._t("dry_run", now=now,
+                confirmed=sum(h.status == CONFIRMED for h in self.hyps),
                 refuted=sum(h.status == REFUTED for h in self.hyps),
                 insufficient=sum(h.status == INSUFFICIENT for h in self.hyps))
         return self
@@ -323,14 +334,79 @@ class Incident:
                                  for h in self.hyps if h.status == INSUFFICIENT],
                 "timeline": self.timeline}
 
-    def export_report(self, now=None, share=False):
-        """故障报告 markdown（docs/09 §1.5）。share=True 剥离个人层（📌/内网URL）后导出。"""
+    def _target_label(self):
+        """目标行（#39）：远程目标附 ssh·os 括注（查 targets.yaml），
+        本机按样子显示，手动目标（manual-xxxx）不查清单直接给。"""
+        if self.target == LOCAL:
+            return f"{self.target}（本机）"
+        try:
+            import access
+            t = access.load_targets().get(self.target) or {}
+            meta = " · ".join(x for x in (t.get("connector"), t.get("os")) if x)
+            return f"{self.target}（{meta}）" if meta else self.target
+        except Exception:
+            return self.target
+
+    def _timeline_lines(self):
+        """时间线事件流水（#39）：HH:MM + 人话事件。无 ts 的旧条目跳过。"""
+        import datetime as _dt
+        _EVT = {"hypotheses": lambda k: f"匹配到 {len(k.get('ids', []))} 个排查方法",
+                "auto_sweep": lambda k: f"本机自动取证 {k.get('executed', 0)} 条",
+                "mixed_sweep": lambda k: (
+                    f"自动取证 {k.get('executed', 0)} 条"
+                    + (f"（{len(k.get('manual_targets', []))} 个目标转人工）"
+                       if k.get("manual_targets") else "")),
+                "ingest": lambda k: f"人工贴回解析 {k.get('n', 0)} 条",
+                "manual_paste": lambda k: f"转人工贴回 {k.get('n', 0)} 条",
+                "dry_run": lambda k: (
+                    f"干跑判定：{k.get('confirmed', 0)} 项已排查 / "
+                    f"{k.get('refuted', 0)} 已排除 / {k.get('insufficient', 0)} 证据不足")}
+        out = []
+        for e in self.timeline:
+            fn = _EVT.get(e.get("event"))
+            if fn is None or not e.get("ts"):
+                continue                          # 未知事件/无 ts（旧状态）不硬渲
+            hm = _dt.datetime.fromtimestamp(e["ts"]).strftime("%H:%M")
+            text = fn({k: v for k, v in e.items() if k not in ("event", "ts")})
+            if text:
+                out.append(f"{hm} {text}")
+        return out
+
+    def export_report(self, now=None, share=False, conclusion=""):
+        """故障报告 markdown（docs/09 §1.5）。share=True 剥离个人层（📌/内网URL）后导出。
+        conclusion：LLM 对本轮诊断的一句总结（展示层现场生成后传入；空/降级→整行不出现）。"""
         d = self.dossier(now=now)
-        lines = [f"# 故障报告：{self.symptom}", "",
-                 f"- 目标：{self.target}", ""]
+        # 取证时间窗：首批时间线 ts ~ 干跑 ts（无时间线则整行不出现）
+        tss = [e["ts"] for e in self.timeline if e.get("ts")]
+        window = None
+        if tss:
+            import datetime as _dt
+            t0, t1 = _dt.datetime.fromtimestamp(min(tss)), \
+                _dt.datetime.fromtimestamp(max(tss))
+            if t0.date() == t1.date():
+                window = f"{t0.strftime('%Y-%m-%d %H:%M')} ~ {t1.strftime('%H:%M')}"
+            else:
+                window = (f"{t0.strftime('%Y-%m-%d %H:%M')} ~ "
+                          f"{t1.strftime('%Y-%m-%d %H:%M')}")
+        lines = ["# 故障报告：", ""]
+        meta = []
+        if window:
+            meta.append(("时间", window))
+        meta.append(("目标", self._target_label()))
+        meta.append(("症状", self.symptom))
+        params = {k: v for k, v in self.params.items()
+                  if not any(v is x for x in (None, ""))}
+        meta.append(("关键参数", " ".join(f"{k}={v}" for k, v in params.items())))
+        if conclusion:
+            meta.append(("结论", conclusion))
+        for k, v in meta:
+            if v:
+                lines.append(f"- {k}：{v}")
+        lines.append("")
         if d[CONFIRMED]:
-            # 与 render_dossier 同口径（发起人 2026-09-23）：已排查、不带 badge
-            lines.append("## 结论（已排查）")
+            # 与 render_dossier 同口径（发起人 2026-09-23）：已排查桶、不带 badge；
+            # 小节名"排查结果"（发起人 2026-09-24 裁定）
+            lines.append("## 排查结果")
             for it in d[CONFIRMED]:
                 lines.append(f"- **{it['name']}**：{it['conclusion']}")
                 for e in it["evidence"][:6]:
@@ -345,6 +421,18 @@ class Incident:
             lines.append("## 证据不足 / 待人工")
             for it in d[INSUFFICIENT]:
                 lines.append(f"- {it['name']}：还差 {it['missing'] or '（人工选择）'}")
+            lines.append("")
+        # 空桶也明说（报告读者不用猜哪些方向没查）
+        for name, items in (("已排除", d[REFUTED]), ("证据不足 / 待人工", d[INSUFFICIENT])):
+            if not items and name not in [ln[3:] for ln in lines if ln.startswith("## ")]:
+                lines.append(f"## {name}")
+                lines.append("- （无）")
+                lines.append("")
+        # 时间线（事件流水，#39）
+        tl = self._timeline_lines()
+        if tl:
+            lines.append("## 时间线")
+            lines.extend(tl)
             lines.append("")
         text = "\n".join(lines)
         if share:
