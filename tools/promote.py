@@ -132,6 +132,9 @@ def _independent_valid_attestations(skill_dir):
     贪心选一个最大子集：attestor 互不相同 **且** env_fingerprint 分桶互不相同。
     环境三元组 = (os 家族, os 主版本桶, 机器架构)——arch 于 2026-09-11 替代
     已废除的 scale_bucket（旧文件无 arch 时该维失权，.get 返回 None）。
+    只认 outcome=resolved（发起人裁定 2026-09-26）：attestation 是"实地验证
+    成功"的凭据，partial/failed/made_worse 不构成晋级证据（append-only 管道
+    不拒收它们，但 promoter 计数时滤掉）。
     """
     from importlib.machinery import SourceFileLoader
     attest = SourceFileLoader("attest_p", str(HERE / "bin" / "opsaxiom-attest")).load_module()
@@ -141,6 +144,8 @@ def _independent_valid_attestations(skill_dir):
     seen_attestor, seen_env, kept = set(), set(), []
     for af in sorted(adir.glob("*.yaml")):
         att = yaml.safe_load(af.read_text(encoding="utf-8")) or {}
+        if att.get("outcome") != "resolved":
+            continue                     # 认证货币只收 resolved（#41）
         ok, _ = attest.verify_att(att)
         if not ok:
             continue
@@ -225,6 +230,39 @@ def _de_localize(skill_path, skill, meta):
         yaml.safe_dump(new_skill, allow_unicode=True, sort_keys=False), encoding="utf-8")
     print(f"✔ 已生成可发布版本：{draft_dir / 'skill.yaml'}")
     print(f"  id={new_id}  （hub push 即可提 PR 至社区）")
+
+
+def maybe_promote_field(skill_dir):
+    """bot 编程入口（#41）：skill 目录下若存在 skill.yaml 且当前 sim_verified，
+    尝试 field 晋级。返回 (promoted(bool), note)。校验/门槛失败只报不抛——
+    bot 批处理里单 skill 晋级不成立不拖累凭据入库。"""
+    try:
+        skill_dir = pathlib.Path(skill_dir)
+        sp = skill_dir / "skill.yaml"
+        if not sp.exists():
+            return False, "无 skill.yaml"
+        skill = yaml.safe_load(sp.read_text(encoding="utf-8"))
+        cur = (skill.get("metadata") or {}).get("maturity")
+        if cur != "sim_verified":
+            return False, f"当前 {cur}，非 sim_verified"
+        rep = V.validate_file(sp, V._default_validator())
+        if rep.errors:
+            return False, f"校验未过：{[e[2] for e in rep.errors][:2]}"
+        n, kept = _independent_valid_attestations(skill_dir)
+        if n < 3:
+            return False, f"独立 resolved 凭据 {n}/3"
+        _maturity_line_replace(sp, "field_verified")
+        ev = {"skill": skill["metadata"]["id"], "action": "promote_field",
+              "from": "sim_verified", "to": "field_verified",
+              "at": datetime.datetime.now().isoformat(timespec="seconds"),
+              "independent_attestations": n, "sources": kept,
+              "trigger": "attest-bot"}
+        (_evidence_dir(sp) / "field.json").write_text(
+            json.dumps(ev, ensure_ascii=False, indent=2))
+        print(f"✔ {skill['metadata']['id']}: sim_verified → field_verified（{n} 份独立 resolved 凭据）")
+        return True, f"promoted with {n} attestations"
+    except Exception as e:                                   # noqa: BLE001
+        return False, f"晋级判定异常（忽略）：{e}"
 
 
 def main():

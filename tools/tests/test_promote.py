@@ -43,3 +43,99 @@ def test_scenarios_lookup():
     assert len(promote._scenarios_for(ROOT / "skills/host/agent-deploy/skill.yaml")) == 1
     # load-high 现有 context + real 两个场景
     assert len(promote._scenarios_for(ROOT / "skills/host/load-high/skill.yaml")) == 2
+
+
+# ---------- #41：outcom 过滤 + maybe_promote_field（bot 编程入口） ----------
+
+def _tmp_skill_dir(tmp_path, maturity="sim_verified", skill_id="host.promoteme"):
+    """最小合法 skill 目录（过 validate 零 ERROR）：skill.yaml + 空 attestations/。
+    不落 ROOT，免 _scenarios_for 误伤。"""
+    import yaml
+    d = tmp_path / skill_id.replace(".", "_")
+    d.mkdir()
+    (d / "skill.yaml").write_text(yaml.safe_dump({
+        "apiVersion": "skill/v0.1",
+        "kind": "Diagnostic",
+        "metadata": {"id": skill_id, "name": "p", "taxonomy": "host/p",
+                     "version": "0.1.0", "maturity": maturity,
+                     "platforms": [{"os": "linux"}],
+                     "provenance": {"generated_by": "test"}},
+        "requirements": {"capability_level": "read", "connectors": ["ssh"]},
+        "tree": {"entry": "done1",
+                 "nodes": [{"id": "done1", "type": "done", "summary": "ok"}]},
+        "tests": [{"scenario": "tests/ok.yaml", "expect_path": ["done1"]}],
+    }, allow_unicode=True, sort_keys=False))
+    (d / "attestations").mkdir()
+    return d
+
+
+def _write_att(d, name, attestor, outcome, family="rhel", bucket="8.x", arch="x86_64",
+               sign=True):
+    """写一份凭据（sign=True 时真签名，验签）；返回文件路径。"""
+    import os
+    import yaml as _yaml
+    from importlib.machinery import SourceFileLoader
+    m = SourceFileLoader("attest_tp", str(ROOT / "tools" / "bin" / "opsaxiom-attest")).load_module()
+    os.environ.setdefault("OPSAXIOM_HOME", "/tmp/tp-home")
+    att = {"skill": "host.promoteme", "skill_version": "0.1.0", "outcome": outcome,
+           "mode": "navigator",
+           "env_fingerprint": {"os": {"family": family, "version_bucket": bucket},
+                               "arch": arch},
+           "deviations": [], "rollback_exercised": False, "attestor": attestor}
+    if sign:
+        att["signature"] = m.sign_att(att)
+    p = d / "attestations" / name
+    p.write_text(_yaml.safe_dump(att, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return p
+
+
+def test_independent_counts_only_resolved(tmp_path):
+    """outcome 过滤（#41 发起人裁定）：partial/failed/made_worse 不计入独立数。"""
+    d = _tmp_skill_dir(tmp_path)
+    _write_att(d, "a1.yaml", "u1", "resolved")
+    _write_att(d, "a2.yaml", "u2", "partial")
+    _write_att(d, "a3.yaml", "u3", "failed")
+    n, kept = promote._independent_valid_attestations(d)
+    assert n == 1 and kept == ["a1.yaml"]
+
+
+def test_independent_dedup_unchanged_for_resolved(tmp_path):
+    """resolved 票仍按 attestor+env 去重（原口径不回退）。"""
+    d = _tmp_skill_dir(tmp_path)
+    _write_att(d, "a1.yaml", "u1", "resolved")
+    _write_att(d, "a2.yaml", "u1", "resolved")                       # 同人 → 不独立
+    _write_att(d, "a3.yaml", "u2", "resolved", family="debian")      # 独立
+    n, kept = promote._independent_valid_attestations(d)
+    assert n == 2 and kept == ["a1.yaml", "a3.yaml"]
+
+
+def test_maybe_promote_field_promotes_at_three(tmp_path):
+    """3 份独立 resolved 真签名 → 改 maturity 行 + field.json 落证。"""
+    d = _tmp_skill_dir(tmp_path)
+    _write_att(d, "a1.yaml", "u1", "resolved")
+    _write_att(d, "a2.yaml", "u2", "resolved", family="debian", bucket="12.x")
+    _write_att(d, "a3.yaml", "u3", "resolved", arch="aarch64")
+    ok, note = promote.maybe_promote_field(d)
+    assert ok, note
+    raw = (d / "skill.yaml").read_text()
+    assert "maturity: field_verified" in raw
+    evfile = d / ".maturity" / "field.json"
+    assert '"independent_attestations": 3' in evfile.read_text()
+
+
+def test_maybe_promote_field_blocked_under_three(tmp_path):
+    """2 份独立 → 不动文件，返回解释性 note。"""
+    d = _tmp_skill_dir(tmp_path)
+    _write_att(d, "a1.yaml", "u1", "resolved")
+    _write_att(d, "a2.yaml", "u2", "resolved", family="debian")
+    before = (d / "skill.yaml").read_text()
+    ok, note = promote.maybe_promote_field(d)
+    assert not ok and "2/3" in note
+    assert (d / "skill.yaml").read_text() == before
+
+
+def test_maybe_promote_field_ignores_non_sim(tmp_path):
+    """非 sim_verified（已被人工升过/降过）→ 不动，note 说明现状。"""
+    d = _tmp_skill_dir(tmp_path, maturity="field_verified")
+    ok, note = promote.maybe_promote_field(d)
+    assert not ok and "非 sim_verified" in note

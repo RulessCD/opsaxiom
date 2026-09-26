@@ -86,6 +86,7 @@ def main():
                            "-L", "200").stdout)
     accepted = rejected = skipped = 0
     changed = False
+    touched_skill_dirs = set()      # 本批有凭据落树的 skill 目录（→ 自动晋级候选）
 
     for it in issues:
         num, author, body = it["number"], it["author"]["login"], it.get("body") or ""
@@ -115,6 +116,7 @@ def main():
                 lines.append(f"✔ 已入库 `{sid}` → `skills/…/{info}`")
                 accepted += 1
                 changed = True
+                touched_skill_dirs.add(d.parent)
             elif st == "skip":
                 lines.append(f"⏭ 已存在（幂等跳过）：`{info}`")
                 skipped += 1
@@ -129,8 +131,29 @@ def main():
         gh("issue", "close", str(num))
 
     if changed:
+        # 🟢 自动晋级（#41，发起人定稿 2026-09-26）：本批有凭据入库的 skill，
+        # 落树后即查独立 resolved 凭据数——≥3 且 sim_verified → 就地升 field_verified。
+        # 判定与 CLI `promote field` 同源（promote.maybe_promote_field 单源）；
+        # 改动（skill.yaml maturity 行 + .maturity/field.json）随本批 commit，
+        # PR/direct 档位沿用既有开关。判定失败只报不抛，不拖累凭据已入库的事实。
+        promoted = 0
+        try:
+            import promote as _promote
+            for sd in sorted(touched_skill_dirs):
+                ok, note = _promote.maybe_promote_field(sd)
+                if ok:
+                    promoted += 1
+                elif note:
+                    print(f"  ⚠ 晋级未成 {sd.name}：{note}")
+        except Exception as e:                               # noqa: BLE001
+            print(f"  ⚠ 自动晋级环节异常（凭据已入库不受影响）：{e}")
         n = index_rebuild(reg)
-        print(f"index.json 重建：{n} entries")
+        print(f"index.json 重建：{n} entries（晋级 {promoted} 个 skill）")
+        if promoted:
+            envf2 = os.environ.get("GITHUB_ENV")
+            if envf2:
+                with open(envf2, "a") as f:
+                    f.write(f"BATCH_PROMOTED={promoted}\n")
 
     envf = os.environ.get("GITHUB_ENV")
     if envf:
