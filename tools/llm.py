@@ -180,7 +180,7 @@ def _ssl_context():
         return None
 
 
-def _http_json(url, payload, timeout=20):
+def _http_json(url, payload, timeout=60):
     import urllib.request
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
@@ -242,7 +242,7 @@ def backend_call(cfg, prompt, system):
                 headers={"Content-Type": "application/json",
                          **({"Authorization": f"Bearer {headers_key}"} if headers_key else {})})
             ctx = _ssl_context()
-            with urllib.request.urlopen(req, timeout=20,
+            with urllib.request.urlopen(req, timeout=60,
                                         **({"context": ctx} if ctx else {})) as r:
                 data = json.loads(r.read().decode("utf-8"))
             return data["choices"][0]["message"]["content"]
